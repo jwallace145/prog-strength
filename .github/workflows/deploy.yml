@@ -19,9 +19,9 @@ jobs:
           script: |
             cd /home/ubuntu/prog-strength
             git pull origin main
-            docker-compose down
-            docker-compose up --build -d
+            docker compose down
+            docker compose up --build -d
             echo "Deployment complete. Checking service status..."
-            docker-compose ps
+            docker compose ps
             echo "Recent logs:"
-            docker-compose logs --tail=50
+            docker compose logs --tail=50

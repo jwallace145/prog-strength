@@ -49,7 +49,7 @@ Run these commands on your EC2 instance:
 sudo apt update && sudo apt upgrade -y
 
 # Install Docker
-sudo apt install -y docker.io docker-compose-v2
+sudo apt install -y docker.io docker compose-v2
 
 # Add ubuntu user to docker group (so you don't need sudo)
 sudo usermod -aG docker ubuntu
@@ -233,7 +233,7 @@ scp -i ~/Downloads/your-key.pem ubuntu@54.123.45.67:~/prog-strength/data/app.db 
 ```
 
 **Automated backups (future):**
-- Add Litestream to `docker-compose.yml` to continuously backup to S3
+- Add Litestream to `docker compose.yml` to continuously backup to S3
 - Or set up a cron job to copy `app.db` to S3 daily
 
 ---
@@ -250,7 +250,7 @@ Check EC2 Security Group allows port 8080 from anywhere (0.0.0.0/0).
 
 ### Database is empty after restart
 
-Make sure the `data/` directory exists and `docker-compose.yml` has the volume mount:
+Make sure the `data/` directory exists and `docker compose.yml` has the volume mount:
 ```yaml
 volumes:
   - ./data:/data
@@ -317,7 +317,7 @@ docker stats
 Once this is working:
 
 1. **Get a domain name** (when you decide on branding)
-2. **Add HTTPS with Caddy** (3 lines in docker-compose.yml)
+2. **Add HTTPS with Caddy** (3 lines in docker compose.yml)
 3. **Set up Litestream** for automatic S3 backups
 4. **Add monitoring** (uptime checks, error alerts)
 

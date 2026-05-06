@@ -20,13 +20,13 @@ Run with Docker and persistent SQLite storage:
 
 ```bash
 # Build and start
-docker-compose up -d
+docker compose up -d
 
 # View logs
-docker-compose logs -f api
+docker compose logs -f api
 
 # Stop
-docker-compose down
+docker compose down
 ```
 
 The API runs on `http://localhost:8080` with data persisted to `./data/app.db`.
@@ -89,9 +89,9 @@ See [CLAUDE.md](./CLAUDE.md) for detailed architecture and development guideline
 
 The Docker setup mirrors production deployment. For EC2:
 
-1. Copy `docker-compose.yml` to your EC2 instance
+1. Copy `docker compose.yml` to your EC2 instance
 2. Set up volume mount for `/data` (database persistence)
-3. Run `docker-compose up -d`
+3. Run `docker compose up -d`
 4. Configure reverse proxy (nginx/caddy) for HTTPS
 5. (Optional) Add Litestream sidecar for S3 backups
 
