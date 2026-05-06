@@ -2,9 +2,10 @@ package server
 
 import (
 	"net/http"
+
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/httpresp"
 )
 
 func HealthCheck(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("OK"))
+	httpresp.OK(w, "service is healthy", nil)
 }

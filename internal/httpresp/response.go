@@ -1,0 +1,80 @@
+// Package httpresp defines the standard JSON envelopes used by every
+// HTTP handler in the API. Centralizing them keeps response shape
+// consistent and makes it cheap to add cross-cutting fields (environment,
+// version, request ID) in one place.
+package httpresp
+
+import (
+	"context"
+	"encoding/json"
+	"log"
+	"net/http"
+)
+
+const service = "Prog Strength Backend"
+
+// Response is the envelope for successful API responses. Add common
+// fields here and they will flow through every handler without
+// changing call sites.
+type Response struct {
+	Service string `json:"service"`
+	Message string `json:"message"`
+	Data    any    `json:"data,omitempty"`
+	// Environment string `json:"environment,omitempty"` // TODO: populate once a Config struct exists.
+	// Version     string `json:"version,omitempty"`     // TODO: populate from build info (-ldflags).
+}
+
+// ErrorResponse is the envelope for failed API responses. The HTTP
+// status code is the success/failure signal; this body carries a
+// human-readable explanation. Error is required; Message is intentionally
+// absent so success and failure shapes are unambiguous.
+type ErrorResponse struct {
+	Service string `json:"service"`
+	Error   string `json:"error"`
+	// Environment string `json:"environment,omitempty"`
+	// Version     string `json:"version,omitempty"`
+}
+
+// OK writes a 200 response with the given message and optional data
+// (data may be nil and will be omitted from the JSON output).
+func OK(w http.ResponseWriter, message string, data any) {
+	writeSuccess(w, http.StatusOK, message, data)
+}
+
+// Created writes a 201 response. Use after a successful resource creation.
+func Created(w http.ResponseWriter, message string, data any) {
+	writeSuccess(w, http.StatusCreated, message, data)
+}
+
+func writeSuccess(w http.ResponseWriter, status int, message string, data any) {
+	writeJSON(w, status, Response{
+		Service: service,
+		Message: message,
+		Data:    data,
+	})
+}
+
+// Error writes a JSON error response with the given status and message.
+func Error(w http.ResponseWriter, status int, msg string) {
+	writeJSON(w, status, ErrorResponse{
+		Service: service,
+		Error:   msg,
+	})
+}
+
+// ServerError logs op and err for operators, then writes a generic 500
+// to avoid leaking internal details to callers. ctx is reserved for
+// structured logging (request ID, user ID) once log/slog is adopted.
+func ServerError(w http.ResponseWriter, ctx context.Context, op string, err error) {
+	log.Printf("%s: %v", op, err)
+	Error(w, http.StatusInternalServerError, "internal server error")
+}
+
+func writeJSON(w http.ResponseWriter, status int, body any) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(body); err != nil {
+		// Headers are already sent; log and move on.
+		log.Printf("write json: %v", err)
+	}
+}

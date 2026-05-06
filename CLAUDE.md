@@ -127,17 +127,30 @@ Libraries: `golang.org/x/oauth2` + `github.com/golang-jwt/jwt/v5`.
 
 - **Handler lives in the domain package** as `handler.go`, exposed as a
   `Handler` struct with `NewHandler(repo Repository)` and `Mount(chi.Router)`.
-- **Response envelopes for collections** (`{"data": [...]}`), raw object for
-  single resources. Lets pagination be added without breaking changes.
-- **Error envelope:** `{"error": "human-readable message"}`. Machine-readable
-  error codes will be added when a client needs them — not preemptively.
+- **Standard response envelope** lives in `internal/httpresp/`. Every handler
+  uses it; do not hand-roll JSON responses.
+  - **Success shape:** `{"service": "Prog Strength Backend", "message": "...", "data": ...}`.
+    `message` is required and describes what the endpoint did. `data` is
+    optional (omitted when nil) and carries the payload — single object,
+    list, whatever the endpoint returns.
+  - **Error shape:** `{"service": "Prog Strength Backend", "error": "human-readable message"}`.
+    No `message` field on errors — `error` is required, `message` is required
+    only on success. The two shapes are deliberately distinct so callers
+    cannot confuse them.
+  - HTTP status code is the success/failure signal; the body carries the
+    explanation. Machine-readable error codes will be added when a client
+    needs them — not preemptively.
+  - Helpers: `httpresp.OK(w, message, data)`, `httpresp.Created(w, message, data)`,
+    `httpresp.Error(w, status, msg)`, `httpresp.ServerError(w, ctx, op, err)`.
+    Add new status helpers (e.g. `Accepted`, `NoContent`) only when a handler
+    actually needs them.
+  - Future common fields (`environment`, `version`, request ID) belong on the
+    `Response` / `ErrorResponse` structs in `httpresp/`, not at call sites.
+    Stubs are already present as commented placeholders.
 - **Validate at the boundary.** Reject invalid query params and request bodies
   before calling the repository, with `400 Bad Request` and a clear message.
 - `errors.Is(err, ErrNotFound)` — never `err == ErrNotFound`. Repository
   implementations may wrap errors with context.
-- Helper functions (`writeJSON`, `writeError`, `writeServerError`) currently
-  duplicated per package. Extract to a shared package only after **three**
-  duplications, not before.
 
 ## Things deliberately NOT done yet
 
@@ -169,45 +182,6 @@ If you're tempted to add any of these, ask first. They've been considered and de
   zero values, defensive copies).
 - **No emoji in code or comments.** No decorative ASCII art.
 - **Tests live next to implementation** (`foo.go` / `foo_test.go`).
-
-## Current project layout
-
-```
-.
-├── cmd/api/main.go              # Entry point — keep tiny
-├── go.mod
-├── go.sum
-└── internal
-    ├── exercise
-    │   ├── catalog.go           # Seeded var Catalog []Exercise
-    │   ├── catalog_test.go      # Validates catalog at test time
-    │   ├── equipment.go         # Equipment enum + Valid()
-    │   ├── errors.go            # Sentinel errors + InvalidEnumError
-    │   ├── exercise.go          # Exercise struct + Validate()
-    │   ├── handler.go           # GET /exercises, GET /exercises/{id}
-    │   ├── memory_repository.go # In-memory Repository impl
-    │   ├── muscle_group.go      # MuscleGroup enum + Valid()
-    │   └── repository.go        # Read-only Repository interface
-    ├── server
-    │   ├── health.go
-    │   └── server.go            # New(), Run(), graceful shutdown
-    ├── user
-    │   ├── errors.go
-    │   ├── memory_repository.go
-    │   ├── repository.go
-    │   ├── user.go
-    │   └── weight_unit.go       # WeightUnit lives here, not in workout
-    └── workout
-        ├── errors.go
-        ├── memory_repository.go
-        ├── repository.go
-        ├── set.go               # imports user.WeightUnit
-        ├── workout.go
-        └── workout_exercise.go
-```
-
-Note: handler.go has only been written for `exercise/`. `workout/` and `user/`
-handlers are not yet built.
 
 ## When in doubt
 

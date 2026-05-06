@@ -1,15 +1,14 @@
 package workout
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/httpresp"
 )
 
 // Handler exposes HTTP endpoints for workout logging.
@@ -35,13 +34,13 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	// DEV-ONLY: Extract user ID from header until OAuth middleware is in place.
 	userID := r.Header.Get("X-User-ID")
 	if userID == "" {
-		writeError(w, http.StatusUnauthorized, "X-User-ID header required (dev-only)")
+		httpresp.Error(w, http.StatusUnauthorized, "X-User-ID header required (dev-only)")
 		return
 	}
 
 	var req createWorkoutRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+		httpresp.Error(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
@@ -60,7 +59,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	} else {
 		performedAt, err = time.Parse(time.RFC3339, req.PerformedAt)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid performed_at: must be RFC3339 format")
+			httpresp.Error(w, http.StatusBadRequest, "invalid performed_at: must be RFC3339 format")
 			return
 		}
 	}
@@ -92,49 +91,26 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 			errors.Is(err, ErrExerciseIDRequired) || errors.Is(err, ErrInvalidOrder) ||
 			errors.Is(err, ErrSetsRequired) || errors.Is(err, ErrInvalidReps) ||
 			errors.Is(err, ErrInvalidWeight) {
-			writeError(w, http.StatusBadRequest, err.Error())
+			httpresp.Error(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		writeServerError(w, r.Context(), "create workout", err)
+		httpresp.ServerError(w, r.Context(), "create workout", err)
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, workout)
+	httpresp.Created(w, "created workout", workout)
 }
 
 // createWorkoutRequest is the request body for POST /workouts.
 type createWorkoutRequest struct {
-	Name        string                    `json:"name"`
-	PerformedAt string                    `json:"performed_at"` // RFC3339 format
-	Notes       string                    `json:"notes"`
-	Exercises   []createWorkoutExercise   `json:"exercises"`
+	Name        string                  `json:"name"`
+	PerformedAt string                  `json:"performed_at"` // RFC3339 format
+	Notes       string                  `json:"notes"`
+	Exercises   []createWorkoutExercise `json:"exercises"`
 }
 
 type createWorkoutExercise struct {
 	ExerciseID string `json:"exercise_id"`
 	Notes      string `json:"notes"`
 	Sets       []Set  `json:"sets"`
-}
-
-// errorResponse is the standard error envelope returned by all handlers.
-type errorResponse struct {
-	Error string `json:"error"`
-}
-
-func writeJSON(w http.ResponseWriter, status int, body any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(body); err != nil {
-		// Headers are already sent; log and move on.
-		log.Printf("write json: %v", err)
-	}
-}
-
-func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, errorResponse{Error: msg})
-}
-
-func writeServerError(w http.ResponseWriter, ctx context.Context, op string, err error) {
-	log.Printf("%s: %v", op, err)
-	writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal server error"})
 }
