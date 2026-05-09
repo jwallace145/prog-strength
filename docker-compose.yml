@@ -3,6 +3,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        APP_VERSION: ${APP_VERSION:-dev}
     # No `ports:` — the api is only reachable on the docker-compose
     # internal network. Caddy is the only public-facing container.
     expose:

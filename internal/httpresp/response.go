@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/version"
 )
 
 const service = "Prog Strength Backend"
@@ -18,10 +20,9 @@ const service = "Prog Strength Backend"
 // changing call sites.
 type Response struct {
 	Service string `json:"service"`
+	Version string `json:"version"`
 	Message string `json:"message"`
 	Data    any    `json:"data,omitempty"`
-	// Environment string `json:"environment,omitempty"` // TODO: populate once a Config struct exists.
-	// Version     string `json:"version,omitempty"`     // TODO: populate from build info (-ldflags).
 }
 
 // ErrorResponse is the envelope for failed API responses. The HTTP
@@ -30,9 +31,8 @@ type Response struct {
 // absent so success and failure shapes are unambiguous.
 type ErrorResponse struct {
 	Service string `json:"service"`
+	Version string `json:"version"`
 	Error   string `json:"error"`
-	// Environment string `json:"environment,omitempty"`
-	// Version     string `json:"version,omitempty"`
 }
 
 // OK writes a 200 response with the given message and optional data
@@ -49,6 +49,7 @@ func Created(w http.ResponseWriter, message string, data any) {
 func writeSuccess(w http.ResponseWriter, status int, message string, data any) {
 	writeJSON(w, status, Response{
 		Service: service,
+		Version: version.Version,
 		Message: message,
 		Data:    data,
 	})
@@ -58,6 +59,7 @@ func writeSuccess(w http.ResponseWriter, status int, message string, data any) {
 func Error(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, ErrorResponse{
 		Service: service,
+		Version: version.Version,
 		Error:   msg,
 	})
 }

@@ -1,0 +1,93 @@
+name: Release and Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write       # for tag + changelog commit push
+  issues: write         # for release notes linking
+  pull-requests: write  # for release notes linking
+
+# Prevent two concurrent release runs from racing on tags. cancel-in-progress
+# is false so an in-flight deploy completes rather than getting killed.
+concurrency:
+  group: release-deploy
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    outputs:
+      new_release_published: ${{ steps.semantic.outputs.new_release_published }}
+      new_release_version: ${{ steps.semantic.outputs.new_release_version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # semantic-release walks history to find the previous tag.
+          fetch-depth: 0
+          persist-credentials: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Run semantic-release
+        id: semantic
+        uses: cycjimmy/semantic-release-action@v4
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  deploy:
+    needs: release
+    if: needs.release.outputs.new_release_published == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy tagged version to EC2
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          JWT_SIGNING_KEY: ${{ secrets.JWT_SIGNING_KEY }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_REDIRECT_URL: ${{ secrets.GOOGLE_REDIRECT_URL }}
+          DEV_AUTH: ${{ secrets.DEV_AUTH }}
+          CORS_ALLOWED_ORIGIN: ${{ secrets.CORS_ALLOWED_ORIGIN }}
+          RELEASE_VERSION: ${{ needs.release.outputs.new_release_version }}
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          envs: JWT_SIGNING_KEY,GOOGLE_CLIENT_ID,GOOGLE_CLIENT_SECRET,GOOGLE_REDIRECT_URL,DEV_AUTH,CORS_ALLOWED_ORIGIN,RELEASE_VERSION
+          script: |
+            cd /home/ubuntu/prog-strength
+            # Fetch the new tag created by semantic-release and check it
+            # out, so we deploy the exact released commit (not whatever
+            # main has drifted to between release and deploy).
+            git fetch --tags --prune
+            git checkout "v${RELEASE_VERSION}"
+
+            # Write .env from secrets forwarded over SSH. APP_VERSION
+            # flows into the docker build via build-arg interpolation
+            # in docker-compose.yml and is embedded into the binary
+            # via -ldflags in the Dockerfile.
+            umask 077
+            cat > .env <<EOF
+            JWT_SIGNING_KEY=${JWT_SIGNING_KEY}
+            GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+            GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+            GOOGLE_REDIRECT_URL=${GOOGLE_REDIRECT_URL}
+            DEV_AUTH=${DEV_AUTH}
+            CORS_ALLOWED_ORIGIN=${CORS_ALLOWED_ORIGIN}
+            APP_VERSION=v${RELEASE_VERSION}
+            EOF
+
+            docker compose down
+            docker compose up --build -d
+
+            echo "Deployed v${RELEASE_VERSION}"
+            docker compose ps
+            docker compose logs --tail=50

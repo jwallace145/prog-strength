@@ -55,6 +55,9 @@ coverage.html
 tmp/
 .air.toml
 
+# Node — semantic-release tooling only; package-lock.json IS committed.
+node_modules/
+
 # macOS
 .DS_Store
 .AppleDouble

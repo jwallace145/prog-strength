@@ -13,9 +13,18 @@ RUN go mod download
 # Copy source code
 COPY . .
 
-# Build the binary
-# CGO_ENABLED=1 is required for go-sqlite3
-RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o api ./cmd/api
+# APP_VERSION is injected at build time by the release pipeline (e.g. "v1.2.3").
+# Local docker builds without --build-arg get "dev". Surfaces in every API
+# response's "version" field via internal/version.Version.
+ARG APP_VERSION=dev
+
+# Build the binary.
+# CGO_ENABLED=1 is required for go-sqlite3.
+# -ldflags injects the version string into internal/version.Version.
+RUN CGO_ENABLED=1 GOOS=linux go build \
+    -a -installsuffix cgo \
+    -ldflags="-X github.com/jwallace145/progressive-overload-fitness-tracker/internal/version.Version=${APP_VERSION}" \
+    -o api ./cmd/api
 
 # Runtime stage
 FROM alpine:latest
