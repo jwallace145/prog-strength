@@ -1,348 +1,279 @@
-# Deployment Guide - Prog Strength
+# Deployment Guide — Prog Strength API
 
-This guide walks through deploying Prog Strength to AWS EC2 with automated GitHub Actions.
+How the API gets to production, what's automated, and what to do when
+something goes wrong.
 
 ## Architecture
 
-- **Single EC2 Instance** (t3.micro or t4g.nano recommended)
-- **Docker Compose** running the API container
-- **SQLite** database persisted to EBS volume
-- **GitHub Actions** for automatic deployment on push to `main`
+- **Single EC2 instance** (`t4g.small`, Graviton/ARM64, Ubuntu 24.04) behind
+  an Elastic IP, in a dedicated VPC. Provisioned by Terraform in
+  [`prog-strength-infra`](https://github.com/Prog-Strength/prog-strength-infra).
+- **Caddy** terminates TLS for `api.progstrength.fitness` (Let's Encrypt
+  cert, auto-renewed) and reverse-proxies to the api container on the
+  docker-compose internal network. The api container has no public ports.
+- **SQLite** lives at `/home/ubuntu/prog-strength-api/data/app.db` on the
+  host, bind-mounted into the api container.
+- **semantic-release** on `prog-strength-api` cuts a new git tag on every
+  `feat:` / `fix:` push to `main`, then SSHes into the EC2 host and runs
+  `docker compose up --build -d` against that tag.
+- **`deploy-caddy.yml`** in `prog-strength-infra` reloads Caddy in-place when
+  only the Caddyfile changes (e.g. adding a new vhost), without bouncing
+  the api.
 
----
+### Host layout
 
-## One-Time EC2 Setup
-
-### 1. Launch EC2 Instance
-
-**AWS Console:**
-1. Go to EC2 → Launch Instance
-2. Choose **Ubuntu Server 24.04 LTS**
-3. Instance type: **t3.micro** (Free tier) or **t4g.nano** (cheapest ARM)
-4. Create or select a key pair (download the `.pem` file - you'll need it!)
-5. Security Group - allow:
-   - **SSH (22)** from your IP
-   - **HTTP (8080)** from anywhere (0.0.0.0/0)
-6. Storage: **8-10 GB** (default is fine)
-7. Launch instance
-
-**Note down:**
-- Public IP address (e.g., `54.123.45.67`)
-- Key pair name
-
-### 2. SSH Into Your Instance
-
-```bash
-# Set key permissions
-chmod 400 ~/Downloads/your-key.pem
-
-# Connect
-ssh -i ~/Downloads/your-key.pem ubuntu@54.123.45.67
+```
+/home/ubuntu/
+├── prog-strength-api/        # api repo, deployed at the released tag
+│   ├── docker-compose.yml    # mounts the Caddyfile from the infra clone
+│   ├── data/                 # SQLite DB lives here (bind-mounted into api)
+│   └── .env                  # written by release.yml each deploy
+└── prog-strength-infra/      # infra repo, kept on main
+    └── caddy/Caddyfile       # bind-mounted into the caddy container
 ```
 
-### 3. Install Docker
+Both repos are cloned on first boot by `modules/compute/bootstrap.sh` in the
+infra repo (see [Provisioning](#provisioning) below).
 
-Run these commands on your EC2 instance:
+## Provisioning
 
-```bash
-# Update system
-sudo apt update && sudo apt upgrade -y
+The EC2 instance, VPC, security group, EIP, and first-boot bootstrap script
+are owned by `prog-strength-infra`. To stand up a new host (or rebuild this
+one), see that repo's README — the short version is:
 
-# Install Docker
-sudo apt install -y docker.io docker compose-v2
-
-# Add ubuntu user to docker group (so you don't need sudo)
-sudo usermod -aG docker ubuntu
-
-# Log out and back in for group change to take effect
-exit
+```sh
+# in prog-strength-infra/
+terraform init
+terraform apply -var-file=environments/prod.tfvars
 ```
 
-SSH back in:
-```bash
-ssh -i ~/Downloads/your-key.pem ubuntu@54.123.45.67
+`bootstrap.sh` (mounted as EC2 user_data) handles on first boot:
+
+- `apt upgrade` + Docker Engine + Compose v2 install
+- adds `ubuntu` to the `docker` group
+- clones `prog-strength-api` to `/home/ubuntu/prog-strength-api`
+- clones `prog-strength-infra` to `/home/ubuntu/prog-strength-infra`
+- creates `/home/ubuntu/prog-strength-api/data` for SQLite
+
+After a fresh provision, the host is ready but no containers are running
+yet — the first `docker compose up` happens on the next release deploy.
+To force one without pushing a `feat:` / `fix:`, manually run the
+`Release and Deploy` workflow via `workflow_dispatch`; if semantic-release
+finds no release-worthy commits it'll no-op, in which case SSH in and run
+`docker compose up --build -d` manually against the latest tag.
+
+### DNS
+
+`api.progstrength.fitness` is an A record at the registrar pointing at the
+EIP. The EIP itself is stable across instance replacements (Terraform
+preserves it), so DNS doesn't need to change on a host rebuild.
+
+## Repository secrets
+
+### `prog-strength-api` (GitHub repo settings → Secrets and variables → Actions)
+
+| Secret                  | Purpose                                                |
+| ----------------------- | ------------------------------------------------------ |
+| `EC2_HOST`              | Elastic IP of the prod instance (not the domain).      |
+| `EC2_SSH_KEY`           | Private key for the `prog-strength-backend-prod-keys` key pair. |
+| `JWT_SIGNING_KEY`       | HMAC secret for app JWTs.                              |
+| `GOOGLE_CLIENT_ID`      | OAuth client ID.                                       |
+| `GOOGLE_CLIENT_SECRET`  | OAuth client secret.                                   |
+| `GOOGLE_REDIRECT_URL`   | OAuth callback URL (must match Google console).        |
+| `DEV_AUTH`              | `true`/`false` — gates `POST /auth/dev/token`. Keep `false` in prod. |
+| `CORS_ALLOWED_ORIGIN`   | Frontend origin allowed by CORS.                       |
+
+### `prog-strength-infra`
+
+| Secret                  | Purpose                                                |
+| ----------------------- | ------------------------------------------------------ |
+| `AWS_ACCESS_KEY_ID`     | CI Terraform user.                                     |
+| `AWS_SECRET_ACCESS_KEY` |                                                        |
+| `EC2_HOST`              | Same EIP as the api repo (used by `deploy-caddy.yml`). |
+| `EC2_SSH_KEY`           | Same key as the api repo.                              |
+
+## Deployment flow
+
+### On push to `prog-strength-api` `main`
+
+`.github/workflows/release.yml`:
+
+1. **release** job — semantic-release inspects commits since the last tag,
+   bumps version, writes CHANGELOG, pushes the tag back to GitHub.
+2. **deploy** job (runs only if a new release was published) — SSHes to
+   the EC2 host as `ubuntu` and:
+   - `cd /home/ubuntu/prog-strength-infra && git pull` — refreshes the
+     Caddyfile mount target.
+   - `cd /home/ubuntu/prog-strength-api && git fetch --tags && git checkout v<X.Y.Z>` — pins to the exact released commit.
+   - Writes `.env` from the repository secrets (and `APP_VERSION=v<X.Y.Z>`,
+     which the Dockerfile embeds into the binary via `-ldflags`).
+   - `docker compose down && docker compose up --build -d`.
+
+Commit type matters — `chore:` / `docs:` / `refactor:` won't cut a release
+and so won't deploy. Use `feat:` for minor, `fix:` for patch.
+
+### On push to `prog-strength-infra` `main` (Caddyfile changes only)
+
+`.github/workflows/deploy-caddy.yml` triggers only when `caddy/**` changes:
+
+1. SSHes to EC2, `git pull`s the infra repo so the bind-mount target is
+   current.
+2. `docker compose exec caddy caddy reload --config /etc/caddy/Caddyfile`
+   — in-place reload, preserves issued Let's Encrypt certs (in the
+   `caddy_data` named volume) and live connections.
+
+For any Terraform changes, the `apply.yml` workflow (in the infra repo)
+handles them.
+
+## Manual operations
+
+### SSH
+
+```sh
+ssh -i prog-strength-backend-prod-keys.pem ubuntu@api.progstrength.fitness
 ```
 
-Verify Docker works:
-```bash
-docker --version
-docker compose version
+If you get `REMOTE HOST IDENTIFICATION HAS CHANGED`, the instance was
+rebuilt — clear the stale host key and reconnect:
+
+```sh
+ssh-keygen -R api.progstrength.fitness
+ssh-keygen -R <elastic-ip>
 ```
 
-### 4. Clone Your Repository
+Verify the new fingerprint against the AWS console output before
+accepting:
 
-```bash
-# Clone the repo
-git clone https://github.com/jwallace145/prog-strength.git
-
-# Navigate to project
-cd prog-strength
-
-# Create data directory for SQLite
-mkdir -p data
+```sh
+aws ec2 get-console-output --instance-id <i-...> --region us-east-2 \
+  --output text | grep -A1 "ECDSA\|ED25519"
 ```
 
-### 5. Initial Deployment
+### Manual deploy (skip GitHub Actions)
 
-```bash
-# Build and start containers
-docker compose up -d
+```sh
+ssh -i prog-strength-backend-prod-keys.pem ubuntu@api.progstrength.fitness
 
-# Check logs
-docker compose logs -f
+cd /home/ubuntu/prog-strength-infra && git pull
 
-# Verify it's running
-curl http://localhost:8080/health
-```
-
-You should see: `OK`
-
-### 6. Test from Your Local Machine
-
-```bash
-# From your laptop (replace with your EC2 IP)
-curl http://54.123.45.67:8080/health
-```
-
-If this works, your API is live! 🎉
-
----
-
-## GitHub Actions Setup
-
-### 1. Add SSH Key to GitHub Secrets
-
-**Get your EC2 private key content:**
-```bash
-# On your laptop
-cat ~/Downloads/your-key.pem
-```
-
-Copy the entire output (including `-----BEGIN RSA PRIVATE KEY-----` and `-----END RSA PRIVATE KEY-----`)
-
-**Add to GitHub:**
-1. Go to https://github.com/jwallace145/prog-strength/settings/secrets/actions
-2. Click **New repository secret**
-3. Name: `EC2_SSH_KEY`
-4. Value: Paste the entire private key
-5. Click **Add secret**
-
-### 2. Add EC2 Host to GitHub Secrets
-
-1. Click **New repository secret**
-2. Name: `EC2_HOST`
-3. Value: Your EC2 public IP (e.g., `54.123.45.67`)
-4. Click **Add secret**
-
-### 3. Enable GitHub Actions
-
-The workflow file is already in `.github/workflows/deploy.yml`.
-
-**Test the workflow:**
-1. Make a small change (e.g., edit README.md)
-2. Commit and push to `main`:
-   ```bash
-   git add .
-   git commit -m "test: trigger deployment"
-   git push origin main
-   ```
-3. Go to https://github.com/jwallace145/prog-strength/actions
-4. Watch the deployment run!
-
----
-
-## Deployment Process
-
-Every time you push to `main`, GitHub Actions will:
-
-1. SSH into your EC2 instance
-2. Run `git pull origin main` to get latest code
-3. Run `docker compose down` to stop old containers
-4. Run `docker compose up --build -d` to rebuild and start
-5. Show you the logs
-
-**Deployment takes ~30-60 seconds** (build time).
-
----
-
-## Manual Deployment
-
-If you need to deploy manually (without pushing to GitHub):
-
-```bash
-# SSH to EC2
-ssh -i ~/Downloads/your-key.pem ubuntu@54.123.45.67
-
-# Navigate to project
-cd prog-strength
-
-# Pull latest changes
-git pull origin main
-
-# Restart services
+cd /home/ubuntu/prog-strength-api
+git fetch --tags --prune
+git checkout v<X.Y.Z>     # or `main` for HEAD
 docker compose down
 docker compose up --build -d
-
-# Check logs
-docker compose logs -f
+docker compose logs --tail=50
 ```
 
----
+`.env` is left in place by the last release deploy; if it's missing, copy
+the contents from the repository secrets.
 
-## Useful Commands on EC2
+### Useful commands on EC2
 
-```bash
-# Check if containers are running
-docker compose ps
+```sh
+cd /home/ubuntu/prog-strength-api
 
-# View logs
-docker compose logs -f
+docker compose ps                            # container state
+docker compose logs -f api                   # follow api logs
+docker compose logs -f caddy                 # follow caddy / TLS logs
+docker compose restart api                   # restart api only
+docker compose exec api sh                   # shell into api
+docker compose exec caddy caddy reload \     # reload caddy in-place
+  --config /etc/caddy/Caddyfile
 
-# Restart services
-docker compose restart
-
-# Stop services
-docker compose down
-
-# Rebuild and restart
-docker compose up --build -d
-
-# Check disk space (SQLite grows over time)
-df -h
-
-# Check database size
-du -h data/app.db
-
-# Access the container shell (for debugging)
-docker compose exec api sh
+du -h data/app.db                            # SQLite size
+df -h                                        # disk
+docker stats                                 # CPU / memory
 ```
 
----
+## Database backups
 
-## Database Backups
+The SQLite DB lives at `/home/ubuntu/prog-strength-api/data/app.db`. No
+automated backups today — see "Next steps" below.
 
-Your SQLite database lives at `/home/ubuntu/prog-strength/data/app.db` on EC2.
+Manual snapshot:
 
-**Manual backup:**
-```bash
-# On EC2
+```sh
+# on EC2
 cp data/app.db data/app.db.backup-$(date +%Y%m%d)
 
-# Or download to your laptop
-scp -i ~/Downloads/your-key.pem ubuntu@54.123.45.67:~/prog-strength/data/app.db ./backup.db
+# or pull to your laptop
+scp -i prog-strength-backend-prod-keys.pem \
+  ubuntu@api.progstrength.fitness:~/prog-strength-api/data/app.db ./backup.db
 ```
-
-**Automated backups (future):**
-- Add Litestream to `docker compose.yml` to continuously backup to S3
-- Or set up a cron job to copy `app.db` to S3 daily
-
----
 
 ## Troubleshooting
 
-### Deployment fails with "Permission denied"
+### Deploy fails with `permission denied (publickey)`
 
-Your SSH key isn't set up correctly in GitHub Secrets. Make sure you copied the **entire** private key including header/footer.
+The `EC2_SSH_KEY` secret is wrong or missing in the repo secrets. Make
+sure the entire private key (with header/footer) is pasted, and that
+`EC2_HOST` is the Elastic IP, not a hostname that's drifted.
 
-### Can't access API from browser
+### Deploy succeeds but `api.progstrength.fitness` returns 502 / 503
 
-Check EC2 Security Group allows port 8080 from anywhere (0.0.0.0/0).
+Caddy is up but can't reach the api container. Check both containers:
 
-### Database is empty after restart
-
-Make sure the `data/` directory exists and `docker compose.yml` has the volume mount:
-```yaml
-volumes:
-  - ./data:/data
+```sh
+docker compose ps             # api should be `Up (healthy)`
+docker compose logs api       # look for migration / startup errors
 ```
 
-### Out of disk space
+If api is restarting in a loop, the most common cause is a missing or
+malformed `.env` — rerun the deploy (or re-write `.env` manually from
+secrets) and `docker compose up -d`.
 
-```bash
-# Clean up old Docker images
-docker system prune -a
+### `docker compose up` fails on a fresh host
 
-# Check database size
-du -h data/app.db
+The bind-mount target `/home/ubuntu/prog-strength-infra/caddy/Caddyfile`
+doesn't exist. Either bootstrap didn't run (check
+`/var/log/cloud-init-output.log`) or the infra repo clone is missing.
+Fix:
+
+```sh
+git clone https://github.com/Prog-Strength/prog-strength-infra.git \
+  /home/ubuntu/prog-strength-infra
 ```
 
-### Migrations not running
+### Caddy can't issue a certificate
 
-Check the logs:
-```bash
-docker compose logs api | grep migration
+Hit Let's Encrypt's rate limit during testing? Check:
+
+```sh
+docker compose logs caddy | grep -i "acme\|rate"
 ```
 
----
+The `caddy_data` named volume holds issued certs and the ACME account key
+— do **not** wipe it. If you do, you'll need to wait for the rate limit
+to clear (up to 7 days) or use a staging endpoint.
 
-## Monitoring
+### Out of disk
 
-**Check if API is healthy:**
-```bash
-curl http://54.123.45.67:8080/health
+```sh
+docker system prune -a       # drop unused images
+du -h data/app.db            # check DB size
 ```
 
-**Watch real-time logs:**
-```bash
-# SSH to EC2
-cd prog-strength
-docker compose logs -f
+### Migrations didn't run
+
+```sh
+docker compose logs api | grep -i migration
 ```
 
-**See resource usage:**
-```bash
-docker stats
-```
+## Cost (rough)
 
----
+- `t4g.small` (Graviton, on-demand, us-east-2): ~$12/mo
+- 8 GiB gp3 root volume: ~$0.65/mo
+- Elastic IP (attached): free
+- Data transfer out: free below 100 GiB/mo on the new AWS free tier
 
-## Cost Estimate
+Total: roughly **$13/mo** under typical load.
 
-**AWS Free Tier (first 12 months):**
-- t3.micro: **Free** (750 hours/month)
-- EBS: **Free** (30 GB)
-- Data transfer: **Free** (15 GB out)
+## Next steps
 
-**After free tier:**
-- t3.micro: ~$7/month
-- t4g.nano (ARM): ~$3/month (cheaper!)
-- EBS (10 GB): ~$1/month
-
-**Total: ~$4-8/month**
-
----
-
-## Next Steps
-
-Once this is working:
-
-1. **Get a domain name** (when you decide on branding)
-2. **Add HTTPS with Caddy** (3 lines in docker compose.yml)
-3. **Set up Litestream** for automatic S3 backups
-4. **Add monitoring** (uptime checks, error alerts)
-
-For now, you have a production API running for $0-8/month! 🚀
-
----
-
-## TODO: harden the public-IP exposure
-
-The EC2 security group currently allows port 8080 from `0.0.0.0/0` (see
-"Launch EC2 Instance" above). With JWT auth in place, the realistic threat
-is no longer arbitrary DB writes, but the API still:
-
-- Serves traffic over plain HTTP — JWTs can be sniffed on the wire.
-- Mounts `POST /auth/dev/token` whenever `DEV_AUTH=true`, which lets anyone
-  who reaches the host mint a JWT for any email.
-
-Both go away the same day you do steps 1+2 above (domain + Caddy/HTTPS),
-because at that point you can:
-
-- Set `DEV_AUTH=false` in production — Google OAuth becomes the only path.
-- Update the Google redirect URI to `https://your-domain/auth/google/callback`.
-- Optionally narrow the security group to 80/443 only.
-
-Until then, if you want zero exposure, restrict the inbound 8080 rule to
-your home IP in the AWS console — it's a one-click change and doesn't
-require any code or config.
-
+- **Litestream → S3** for continuous SQLite backup. Add as a sidecar in
+  `docker-compose.yml`; needs an IAM role on the instance or an access
+  key in `.env`.
+- **Uptime monitoring** for `https://api.progstrength.fitness/health`.
+- **Add the MCP server vhost** to `prog-strength-infra/caddy/Caddyfile`
+  once that service ships — `deploy-caddy.yml` will roll it out without
+  bouncing the api.

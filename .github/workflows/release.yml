@@ -63,7 +63,16 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           envs: JWT_SIGNING_KEY,GOOGLE_CLIENT_ID,GOOGLE_CLIENT_SECRET,GOOGLE_REDIRECT_URL,DEV_AUTH,CORS_ALLOWED_ORIGIN,RELEASE_VERSION
           script: |
-            cd /home/ubuntu/prog-strength
+            # The Caddyfile lives in prog-strength-infra and is mounted
+            # into the caddy container by docker-compose. Pull the infra
+            # repo first so the mount target reflects whatever's on its
+            # main branch when this deploy runs.
+            cd /home/ubuntu/prog-strength-infra
+            git fetch --prune
+            git checkout main
+            git pull --ff-only
+
+            cd /home/ubuntu/prog-strength-api
             # Fetch the new tag created by semantic-release and check it
             # out, so we deploy the exact released commit (not whatever
             # main has drifted to between release and deploy).

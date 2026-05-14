@@ -35,7 +35,11 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Caddyfile is owned by prog-strength-infra, which is cloned to
+      # /home/ubuntu/prog-strength-infra on the host. The release workflow
+      # `git pull`s that repo before each deploy so the mounted file is
+      # current. CADDY_CONFIG_DIR lets local/dev override the host path.
+      - ${CADDY_CONFIG_DIR:-/home/ubuntu/prog-strength-infra/caddy}/Caddyfile:/etc/caddy/Caddyfile:ro
       # caddy_data MUST persist — it stores issued Let's Encrypt certs
       # and the ACME account key. Wiping it forces re-issuance and will
       # quickly trip Let's Encrypt's rate limits.

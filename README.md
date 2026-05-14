@@ -87,13 +87,13 @@ See [CLAUDE.md](./CLAUDE.md) for detailed architecture and development guideline
 
 ## Deployment
 
-The Docker setup mirrors production deployment. For EC2:
+Production runs on a single EC2 host fronted by Caddy (TLS + reverse proxy)
+at `https://api.progstrength.fitness`. Pushes to `main` that semantic-release
+considers release-worthy (`feat:` / `fix:`) auto-deploy via GitHub Actions.
 
-1. Copy `docker compose.yml` to your EC2 instance
-2. Set up volume mount for `/data` (database persistence)
-3. Run `docker compose up -d`
-4. Configure reverse proxy (nginx/caddy) for HTTPS
-5. (Optional) Add Litestream sidecar for S3 backups
+See [DEPLOYMENT.md](./DEPLOYMENT.md) for the full picture (host layout,
+secrets, manual ops, troubleshooting). EC2 + VPC provisioning lives in
+[`prog-strength-infra`](https://github.com/Prog-Strength/prog-strength-infra).
 
 ## Development
 
