@@ -1,3 +1,10 @@
+# [0.4.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.3.0...v0.4.0) (2026-05-14)
+
+
+### Features
+
+* **https:** Migrate Caddyfile to infra repository and update release workflow ([2fd5f8f](https://github.com/Prog-Strength/prog-strength-api/commit/2fd5f8f939dc0efab6f77532df2cc97e127599ae))
+
 # [0.3.0](https://github.com/jwallace145/prog-strength/compare/v0.2.0...v0.3.0) (2026-05-10)
 
 
