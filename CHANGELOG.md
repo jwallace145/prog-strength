@@ -1,3 +1,10 @@
+## [0.4.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.4.0...v0.4.1) (2026-05-14)
+
+
+### Bug Fixes
+
+* **deploy:** Join prog-strength shared docker network ([10392a8](https://github.com/Prog-Strength/prog-strength-api/commit/10392a8b685aa6b97f9535c075a761f67df784ed))
+
 # [0.4.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.3.0...v0.4.0) (2026-05-14)
 
 
