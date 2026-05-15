@@ -1,3 +1,10 @@
+# [0.5.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.4.2...v0.5.0) (2026-05-15)
+
+
+### Features
+
+* **cicd:** Add a manual deploy workflow ([f9536d0](https://github.com/Prog-Strength/prog-strength-api/commit/f9536d0e17fc81ab8cca833306b6ce7bbc961f4f))
+
 ## [0.4.2](https://github.com/Prog-Strength/prog-strength-api/compare/v0.4.1...v0.4.2) (2026-05-15)
 
 
