@@ -1,3 +1,10 @@
+## [0.7.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.7.0...v0.7.1) (2026-05-16)
+
+
+### Bug Fixes
+
+* **exercises:** Update descriptions for dumbbell exercieses to record weight per-dumbbell ([9c64a28](https://github.com/Prog-Strength/prog-strength-api/commit/9c64a28f4d969dd5eff751e7f182fac2cf9757b7))
+
 # [0.7.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.6.1...v0.7.0) (2026-05-16)
 
 
