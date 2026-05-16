@@ -1,3 +1,10 @@
+# [0.7.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.6.1...v0.7.0) (2026-05-16)
+
+
+### Features
+
+* **exercises:** Add additional exercises to the catalog ([486fe3a](https://github.com/Prog-Strength/prog-strength-api/commit/486fe3ad4fbd288a449321d5159fe360f3481984))
+
 ## [0.6.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.6.0...v0.6.1) (2026-05-16)
 
 
