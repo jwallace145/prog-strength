@@ -1,3 +1,10 @@
+## [0.6.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.6.0...v0.6.1) (2026-05-16)
+
+
+### Bug Fixes
+
+* **exercises:** Sync exercise catalog with database ([73ede39](https://github.com/Prog-Strength/prog-strength-api/commit/73ede39d6585a3841890257846c98e3d0ca9d78f))
+
 # [0.6.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.5.0...v0.6.0) (2026-05-16)
 
 
