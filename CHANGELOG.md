@@ -1,3 +1,10 @@
+# [0.11.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.10.0...v0.11.0) (2026-05-17)
+
+
+### Features
+
+* **workouts:** GET /workouts/progression endpoint ([dd8a481](https://github.com/Prog-Strength/prog-strength-api/commit/dd8a481a28406fc254ed421bb3a1199ce48c821d))
+
 # [0.10.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.9.1...v0.10.0) (2026-05-17)
 
 
