@@ -82,7 +82,15 @@ services:
       # /home/ubuntu/prog-strength-infra on the host. The release workflow
       # `git pull`s that repo before each deploy so the mounted file is
       # current. CADDY_CONFIG_DIR lets local/dev override the host path.
-      - ${CADDY_CONFIG_DIR:-/home/ubuntu/prog-strength-infra/caddy}/Caddyfile:/etc/caddy/Caddyfile:ro
+      #
+      # We mount the *directory* (not the single Caddyfile inside it) so
+      # that `git pull` updates are visible inside the container. Single-
+      # file bind mounts on Linux are inode-bound — git's rename-based
+      # working-tree update would leave the container pointed at the old
+      # inode, so caddy reload would silently no-op. Mounting the parent
+      # directory gives late-binding semantics: file replacements inside
+      # propagate immediately.
+      - ${CADDY_CONFIG_DIR:-/home/ubuntu/prog-strength-infra/caddy}:/etc/caddy:ro
       # caddy_data MUST persist — it stores issued Let's Encrypt certs
       # and the ACME account key. Wiping it forces re-issuance and will
       # quickly trip Let's Encrypt's rate limits.
