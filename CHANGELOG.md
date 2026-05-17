@@ -1,3 +1,10 @@
+# [0.10.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.9.1...v0.10.0) (2026-05-17)
+
+
+### Features
+
+* **auth:** add BETA_ALLOWED_EMAILS gate at OAuth callback ([73bff12](https://github.com/Prog-Strength/prog-strength-api/commit/73bff12bbaa7a72bef3cd7ba3c76a0379f3407cb))
+
 ## [0.9.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.9.0...v0.9.1) (2026-05-17)
 
 
