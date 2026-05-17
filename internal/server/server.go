@@ -89,11 +89,12 @@ func New(cfg config.Config) (*Server, error) {
 	// failures surface as 404 (route absent) rather than mysterious 500s.
 	jwtSecret := []byte(cfg.JWTSigningKey)
 	authHandler := auth.NewHandler(auth.Config{
-		JWTSecret:          jwtSecret,
-		GoogleClientID:     cfg.GoogleClientID,
-		GoogleClientSecret: cfg.GoogleClientSecret,
-		GoogleRedirectURL:  cfg.GoogleRedirectURL,
-		DevAuth:            cfg.DevAuth,
+		JWTSecret:              jwtSecret,
+		GoogleClientID:         cfg.GoogleClientID,
+		GoogleClientSecret:     cfg.GoogleClientSecret,
+		GoogleRedirectURL:      cfg.GoogleRedirectURL,
+		DevAuth:                cfg.DevAuth,
+		ReturnToAllowedOrigins: cfg.ReturnToAllowedOrigins,
 	}, userRepo)
 	authHandler.Mount(r)
 	log.Printf("auth: google=%v dev_token=%v", authHandler.HasGoogle(), cfg.DevAuth)

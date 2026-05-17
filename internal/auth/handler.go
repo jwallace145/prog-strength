@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/httpresp"
@@ -19,8 +21,9 @@ import (
 // header. The token is also returned in the response body for non-browser
 // clients (curl, integration tests).
 const (
-	stateCookieName = "oauth_state"
-	authCookieName  = "auth_token"
+	stateCookieName    = "oauth_state"
+	returnToCookieName = "oauth_return_to"
+	authCookieName     = "auth_token"
 )
 
 // Config bundles the values Handler needs to mount routes. Pulled out into
@@ -31,16 +34,22 @@ type Config struct {
 	GoogleClientSecret string
 	GoogleRedirectURL  string
 	DevAuth            bool
+	// ReturnToAllowedOrigins is the whitelist of frontend origins (scheme +
+	// host) that /auth/google/login may redirect back to with the JWT in
+	// the URL fragment. Empty disables the return_to feature and the
+	// callback responds with JSON (legacy curl/test behavior).
+	ReturnToAllowedOrigins []string
 }
 
 // Handler exposes authentication endpoints. It mounts Google OAuth routes
 // only when all Google* fields are present, and the dev-token route only
 // when DevAuth is true.
 type Handler struct {
-	googleConfig *oauth2.Config
-	jwtSecret    []byte
-	users        user.Repository
-	devAuth      bool
+	googleConfig           *oauth2.Config
+	jwtSecret              []byte
+	users                  user.Repository
+	devAuth                bool
+	returnToAllowedOrigins []string
 }
 
 // NewHandler constructs a Handler. users is required (find-or-create on login).
@@ -50,10 +59,11 @@ func NewHandler(cfg Config, users user.Repository) *Handler {
 		googleCfg = newGoogleConfig(cfg.GoogleClientID, cfg.GoogleClientSecret, cfg.GoogleRedirectURL)
 	}
 	return &Handler{
-		googleConfig: googleCfg,
-		jwtSecret:    cfg.JWTSecret,
-		users:        users,
-		devAuth:      cfg.DevAuth,
+		googleConfig:           googleCfg,
+		jwtSecret:              cfg.JWTSecret,
+		users:                  users,
+		devAuth:                cfg.DevAuth,
+		returnToAllowedOrigins: cfg.ReturnToAllowedOrigins,
 	}
 }
 
@@ -78,6 +88,14 @@ func (h *Handler) Mount(r chi.Router) {
 // googleLogin redirects the user to Google's consent screen with a CSRF
 // state parameter that we also set as a short-lived cookie. The callback
 // compares the two; mismatched state = potential CSRF, reject.
+//
+// Optional ?return_to=<url> query parameter tells the callback where to
+// bounce the user back to after a successful login. The URL must be in
+// the configured whitelist (open-redirect protection). When set, we
+// stash it in a separate short-lived cookie alongside the state cookie;
+// the callback reads it back to build the redirect target. When unset
+// (or the cookie is lost), the callback falls back to the legacy JSON
+// response shape so curl-based flows still work.
 func (h *Handler) googleLogin(w http.ResponseWriter, r *http.Request) {
 	state, err := randomState()
 	if err != nil {
@@ -93,8 +111,25 @@ func (h *Handler) googleLogin(w http.ResponseWriter, r *http.Request) {
 		Secure:   isHTTPS(r),
 		SameSite: http.SameSiteLaxMode,
 	})
-	url := h.googleConfig.AuthCodeURL(state, oauth2.AccessTypeOnline)
-	http.Redirect(w, r, url, http.StatusTemporaryRedirect)
+
+	if returnTo := r.URL.Query().Get("return_to"); returnTo != "" {
+		if !h.isAllowedReturnTo(returnTo) {
+			httpresp.Error(w, http.StatusBadRequest, "return_to origin is not allowed")
+			return
+		}
+		http.SetCookie(w, &http.Cookie{
+			Name:     returnToCookieName,
+			Value:    returnTo,
+			Path:     "/",
+			MaxAge:   600,
+			HttpOnly: true,
+			Secure:   isHTTPS(r),
+			SameSite: http.SameSiteLaxMode,
+		})
+	}
+
+	authURL := h.googleConfig.AuthCodeURL(state, oauth2.AccessTypeOnline)
+	http.Redirect(w, r, authURL, http.StatusTemporaryRedirect)
 }
 
 // googleCallback receives Google's redirect with code+state, validates the
@@ -128,6 +163,15 @@ func (h *Handler) googleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// If the login set a return_to cookie, redirect there with the JWT
+	// in the URL fragment. Fragments aren't sent to servers, so the
+	// token doesn't leak through Referer headers or proxy logs on the
+	// way to the frontend. Otherwise fall back to the JSON response
+	// shape (curl, integration tests, etc.).
+	if returnTo := h.readAndClearReturnTo(w, r); returnTo != "" {
+		h.issueTokenRedirect(w, r, u, returnTo)
+		return
+	}
 	h.issueToken(w, r, u, "logged in via google")
 }
 
@@ -239,4 +283,74 @@ func randomState() (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+// isAllowedReturnTo reports whether a return_to URL's origin (scheme + host)
+// is in the configured whitelist. Anything not on the list is rejected to
+// prevent /auth/google/login from being used as an open redirect (which
+// would be a phishing primitive — attacker sends a victim a login link
+// that bounces to an attacker-controlled page with the JWT in the fragment).
+func (h *Handler) isAllowedReturnTo(returnTo string) bool {
+	u, err := url.Parse(returnTo)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return false
+	}
+	origin := u.Scheme + "://" + u.Host
+	for _, allowed := range h.returnToAllowedOrigins {
+		if origin == allowed {
+			return true
+		}
+	}
+	return false
+}
+
+// readAndClearReturnTo pops the return_to cookie. Returns the value if the
+// cookie was present and still passes the whitelist check (defense-in-depth:
+// re-validate on every access rather than trusting the cookie was set by us).
+// The cookie is always cleared, even on validation failure.
+func (h *Handler) readAndClearReturnTo(w http.ResponseWriter, r *http.Request) string {
+	cookie, err := r.Cookie(returnToCookieName)
+	// Always clear regardless of outcome — leftover cookies from a
+	// previous flow would otherwise leak across logins.
+	http.SetCookie(w, &http.Cookie{Name: returnToCookieName, Path: "/", MaxAge: -1})
+	if err != nil || cookie.Value == "" {
+		return ""
+	}
+	if !h.isAllowedReturnTo(cookie.Value) {
+		return ""
+	}
+	return cookie.Value
+}
+
+// issueTokenRedirect signs a JWT and redirects to returnTo with the token
+// in the URL fragment (`#access_token=<jwt>&expires_in=<seconds>`). The
+// fragment isn't sent to servers, so the token doesn't appear in Referer
+// headers or server access logs on the way to the frontend.
+//
+// We also set the legacy auth cookie for the API's own origin so that any
+// direct hits to api.* by the same browser tab keep working.
+func (h *Handler) issueTokenRedirect(w http.ResponseWriter, r *http.Request, u *user.User, returnTo string) {
+	tokenStr, err := Sign(u.ID, h.jwtSecret)
+	if err != nil {
+		httpresp.ServerError(w, r.Context(), "sign jwt", err)
+		return
+	}
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     authCookieName,
+		Value:    tokenStr,
+		Path:     "/",
+		MaxAge:   int(JWTLifetime.Seconds()),
+		HttpOnly: true,
+		Secure:   isHTTPS(r),
+		SameSite: http.SameSiteLaxMode,
+	})
+
+	params := url.Values{}
+	params.Set("access_token", tokenStr)
+	params.Set("expires_in", strconv.Itoa(int(JWTLifetime.Seconds())))
+	// Fragments use the same encoding as query strings, so url.Values.Encode
+	// is the right tool here. If returnTo already had its own fragment we'd
+	// overwrite it — the whitelist makes that the caller's problem, not ours.
+	http.Redirect(w, r, returnTo+"#"+params.Encode(), http.StatusTemporaryRedirect)
 }

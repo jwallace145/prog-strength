@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"os"
+	"strings"
 )
 
 // Config holds application configuration loaded from environment variables.
@@ -40,6 +41,16 @@ type Config struct {
 	// (curl-only access still works since CORS is browser-enforced).
 	// Examples: "https://progstrength.fitness" (prod), "http://localhost:5173" (Vite dev).
 	CORSAllowedOrigin string
+
+	// ReturnToAllowedOrigins is the whitelist of origins (scheme + host)
+	// that /auth/google/login may redirect back to via ?return_to=<url>.
+	// Frontend callers pass return_to so the OAuth callback bounces them
+	// to a URL they control, with the JWT in the URL fragment. Without
+	// a whitelist, return_to would be an open-redirect vulnerability.
+	// Empty disables the return_to feature (callback then responds with
+	// JSON, the legacy behavior).
+	// Example env: "http://localhost:3000,https://app.progstrength.fitness"
+	ReturnToAllowedOrigins []string
 }
 
 // Load reads configuration from environment variables.
@@ -54,6 +65,7 @@ func Load() (Config, error) {
 		GoogleRedirectURL:  os.Getenv("GOOGLE_REDIRECT_URL"),
 		DevAuth:            os.Getenv("DEV_AUTH") == "true",
 		CORSAllowedOrigin:  os.Getenv("CORS_ALLOWED_ORIGIN"),
+		ReturnToAllowedOrigins: splitCSV(os.Getenv("RETURN_TO_ALLOWED_ORIGINS")),
 	}
 
 	if cfg.ServerAddr == "" {
@@ -65,4 +77,21 @@ func Load() (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// splitCSV trims and drops empty entries from a comma-separated env var.
+// Returns nil for empty input so callers can do a single nil-check
+// instead of len()==0.
+func splitCSV(s string) []string {
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if trimmed := strings.TrimSpace(p); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }
