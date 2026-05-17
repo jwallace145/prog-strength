@@ -231,4 +231,25 @@ var Catalog = []Exercise{
 		MuscleGroups: []MuscleGroup{MuscleTriceps},
 		Equipment:    []Equipment{EquipmentEZBar, EquipmentFlatBench},
 	},
+	{
+		ID:           "seated-dumbbell-tricep-extension",
+		Name:         "Seated Dumbbell Tricep Extension",
+		Description:  "Seated against an upright bench, hold a single dumbbell vertically overhead with both hands cupping the top plate, lower it behind the head by flexing only at the elbows, then extend back to overhead lockout to isolate the triceps under stretch.",
+		MuscleGroups: []MuscleGroup{MuscleTriceps},
+		Equipment:    []Equipment{EquipmentDumbbell, EquipmentUprightBench},
+	},
+	{
+		ID:           "push-up",
+		Name:         "Push Up",
+		Description:  "From a plank position with hands shoulder-width apart, lower the chest to the floor by flexing at the elbows and retracting the scapulae, then press back to full arm extension; foundational bodyweight horizontal push.",
+		MuscleGroups: []MuscleGroup{MuscleChest},
+		Equipment:    []Equipment{EquipmentNone},
+	},
+	{
+		ID:           "cable-straight-bar-tricep-extension",
+		Name:         "Cable Straight Bar Tricep Extension",
+		Description:  "Standing at a high-pulley cable station with a straight bar attachment and an overhand grip, extend the elbows from a flexed position down to full lockout to isolate the triceps; the rigid bar holds the wrists in a fixed pronated position relative to a rope.",
+		MuscleGroups: []MuscleGroup{MuscleTriceps},
+		Equipment:    []Equipment{EquipmentCable},
+	},
 }
