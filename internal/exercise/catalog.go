@@ -287,4 +287,11 @@ var Catalog = []Exercise{
 		MuscleGroups: []MuscleGroup{MuscleCalves},
 		Equipment:    []Equipment{EquipmentMachine},
 	},
+	{
+		ID:           "barbell-deadlift",
+		Name:         "Barbell Deadlift",
+		Description:  "Standing over a loaded barbell with a shoulder-width stance, hinge at the hips with a neutral spine to grip the bar, then drive through the floor by extending the hips and knees to lock out standing tall. The conventional pull — one of the three headline strength lifts alongside squat and bench.",
+		MuscleGroups: []MuscleGroup{MuscleBack, MuscleHamstrings, MuscleGlutes, MuscleQuads, MuscleCore},
+		Equipment:    []Equipment{EquipmentBarbell},
+	},
 }

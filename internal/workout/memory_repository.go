@@ -22,14 +22,21 @@ type MemoryRepository struct {
 	// The in-memory repo is dev/test only, so the per-list filter for
 	// reads is fine — beats maintaining a second index.
 	history map[string][]OneRepMaxEntry
-	now     func() time.Time // injectable for tests
+	// personal records keyed by "userID:exerciseID" — at most one PR
+	// per (user, exercise), matching the SQLite uniqueness constraint.
+	personalRecords map[string]*PersonalRecord
+	// PR events stored flat; filtered on each operation. Dev/test only,
+	// so the cost is acceptable.
+	personalRecordEvents []PersonalRecordEvent
+	now                  func() time.Time // injectable for tests
 }
 
 func NewMemoryRepository() *MemoryRepository {
 	return &MemoryRepository{
-		workouts: make(map[string]*Workout),
-		history:  make(map[string][]OneRepMaxEntry),
-		now:      time.Now,
+		workouts:        make(map[string]*Workout),
+		history:         make(map[string][]OneRepMaxEntry),
+		personalRecords: make(map[string]*PersonalRecord),
+		now:             time.Now,
 	}
 }
 
@@ -50,6 +57,9 @@ func (r *MemoryRepository) Create(ctx context.Context, w *Workout) error {
 	stored := *w
 	r.workouts[w.ID] = &stored
 	r.writeHistoryLocked(*w, now)
+	for _, exerciseID := range ExercisesInWorkout(*w) {
+		r.recomputePersonalRecordLocked(w.UserID, exerciseID, now)
+	}
 	return nil
 }
 
@@ -115,11 +125,24 @@ func (r *MemoryRepository) Update(ctx context.Context, w *Workout) error {
 		return ErrNotFound
 	}
 
+	// Union of new-exercise set and previously-affected exercise set,
+	// matching the SQLite update path. Compute affected set BEFORE
+	// overwriting the stored workout so we can read the prior PR/event
+	// state.
+	affected := r.affectedExercisesLocked(w.ID)
+	for _, exerciseID := range ExercisesInWorkout(*w) {
+		affected[exerciseID] = struct{}{}
+	}
+
 	w.CreatedAt = existing.CreatedAt
 	w.UpdatedAt = r.now().UTC()
 	stored := *w
 	r.workouts[w.ID] = &stored
 	r.writeHistoryLocked(*w, w.UpdatedAt)
+
+	for exerciseID := range affected {
+		r.recomputePersonalRecordLocked(w.UserID, exerciseID, w.UpdatedAt)
+	}
 	return nil
 }
 
@@ -132,9 +155,22 @@ func (r *MemoryRepository) Delete(ctx context.Context, workoutID string) error {
 		return ErrNotFound
 	}
 	now := r.now().UTC()
+
+	// Capture affected exercises (and the user) BEFORE flipping the
+	// soft-delete flag so the recompute reads consistent state.
+	affected := r.affectedExercisesLocked(workoutID)
+	for _, e := range w.Exercises {
+		affected[e.ExerciseID] = struct{}{}
+	}
+	userID := w.UserID
+
 	w.DeletedAt = &now
 	w.UpdatedAt = now
 	delete(r.history, workoutID)
+
+	for exerciseID := range affected {
+		r.recomputePersonalRecordLocked(userID, exerciseID, now)
+	}
 	return nil
 }
 
@@ -183,4 +219,140 @@ func (r *MemoryRepository) writeHistoryLocked(w Workout, now time.Time) {
 		entries[i].UpdatedAt = now
 	}
 	r.history[w.ID] = entries
+}
+
+func (r *MemoryRepository) ListPersonalRecords(
+	ctx context.Context,
+	userID string,
+) ([]PersonalRecord, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var out []PersonalRecord
+	for _, pr := range r.personalRecords {
+		if pr.UserID != userID {
+			continue
+		}
+		out = append(out, *pr)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].AchievedAt.After(out[j].AchievedAt)
+	})
+	return out, nil
+}
+
+func (r *MemoryRepository) ListPersonalRecordEventsByWorkouts(
+	ctx context.Context,
+	workoutIDs []string,
+) ([]PersonalRecordEvent, error) {
+	if len(workoutIDs) == 0 {
+		return nil, nil
+	}
+	want := make(map[string]struct{}, len(workoutIDs))
+	for _, w := range workoutIDs {
+		want[w] = struct{}{}
+	}
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var out []PersonalRecordEvent
+	for _, e := range r.personalRecordEvents {
+		if _, ok := want[e.WorkoutID]; ok {
+			out = append(out, e)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].AchievedAt.After(out[j].AchievedAt)
+	})
+	return out, nil
+}
+
+// affectedExercisesLocked returns exercise IDs touched by any data
+// keyed on the given workout — same union as the SQLite repo's
+// affectedExercisesForRecomputeTx.
+func (r *MemoryRepository) affectedExercisesLocked(workoutID string) map[string]struct{} {
+	out := map[string]struct{}{}
+	if w, ok := r.workouts[workoutID]; ok {
+		for _, e := range w.Exercises {
+			out[e.ExerciseID] = struct{}{}
+		}
+	}
+	for key, pr := range r.personalRecords {
+		_ = key
+		if pr.WorkoutID == workoutID {
+			out[pr.ExerciseID] = struct{}{}
+		}
+	}
+	for _, e := range r.personalRecordEvents {
+		if e.WorkoutID == workoutID {
+			out[e.ExerciseID] = struct{}{}
+		}
+	}
+	return out
+}
+
+// recomputePersonalRecordLocked re-derives the PR row and event chain
+// for one (user, exercise) pair against the current state of
+// r.workouts. Caller must hold r.mu in write mode.
+func (r *MemoryRepository) recomputePersonalRecordLocked(
+	userID, exerciseID string,
+	now time.Time,
+) {
+	key := userID + ":" + exerciseID
+
+	// Gather snapshots of every non-deleted workout containing this
+	// exercise, in chronological order.
+	var snaps []WorkoutSnapshot
+	for _, w := range r.workouts {
+		if w.UserID != userID || w.DeletedAt != nil {
+			continue
+		}
+		var blocks []ExerciseSnapshot
+		for _, e := range w.Exercises {
+			if e.ExerciseID == exerciseID {
+				blocks = append(blocks, ExerciseSnapshot{
+					ExerciseID: exerciseID,
+					Sets:       append([]Set(nil), e.Sets...),
+				})
+			}
+		}
+		if len(blocks) == 0 {
+			continue
+		}
+		snaps = append(snaps, WorkoutSnapshot{
+			ID:          w.ID,
+			UserID:      w.UserID,
+			PerformedAt: w.PerformedAt,
+			Exercises:   blocks,
+		})
+	}
+	sort.Slice(snaps, func(i, j int) bool {
+		return snaps[i].PerformedAt.Before(snaps[j].PerformedAt)
+	})
+
+	pr, events := RecomputePersonalRecord(snaps, exerciseID)
+
+	// Drop existing state for (user, exercise) before re-inserting.
+	delete(r.personalRecords, key)
+	filtered := r.personalRecordEvents[:0]
+	for _, e := range r.personalRecordEvents {
+		if e.UserID == userID && e.ExerciseID == exerciseID {
+			continue
+		}
+		filtered = append(filtered, e)
+	}
+	r.personalRecordEvents = filtered
+
+	if pr != nil {
+		pr.ID = id.New()
+		pr.CreatedAt = now
+		pr.UpdatedAt = now
+		r.personalRecords[key] = pr
+	}
+	for i := range events {
+		events[i].ID = id.New()
+		events[i].CreatedAt = now
+		r.personalRecordEvents = append(r.personalRecordEvents, events[i])
+	}
 }

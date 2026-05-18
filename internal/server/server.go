@@ -83,6 +83,12 @@ func New(cfg config.Config) (*Server, error) {
 		if err := sqliteWorkoutRepo.BackfillOneRepMaxHistory(context.Background()); err != nil {
 			return nil, err
 		}
+
+		// Same pattern for the personal records and event tables. Both
+		// derived from `workouts`; both gated on count > 0.
+		if err := sqliteWorkoutRepo.BackfillPersonalRecords(context.Background()); err != nil {
+			return nil, err
+		}
 	} else {
 		// In-memory mode (default for local dev without DATABASE_URL).
 		log.Println("using in-memory repositories")

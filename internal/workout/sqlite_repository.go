@@ -90,6 +90,16 @@ func (r *SQLiteRepository) Create(ctx context.Context, w *Workout) error {
 		return err
 	}
 
+	// Personal records + event log. Recompute for each exercise in the
+	// new workout. A backdated workout could affect history downstream
+	// of itself, which is why we re-derive instead of just checking
+	// "does this beat the current PR?" — see personal_record.go.
+	for _, exerciseID := range ExercisesInWorkout(*w) {
+		if err := r.recomputePersonalRecordTx(ctx, tx, w.UserID, exerciseID, now); err != nil {
+			return err
+		}
+	}
+
 	return tx.Commit()
 }
 
@@ -264,8 +274,26 @@ func (r *SQLiteRepository) Update(ctx context.Context, w *Workout) error {
 		`DELETE FROM exercise_one_rep_max_history WHERE workout_id = ?`, w.ID); err != nil {
 		return err
 	}
-	if err := r.writeOneRepMaxHistoryTx(ctx, tx, *w, r.now().UTC()); err != nil {
+	now := r.now().UTC()
+	if err := r.writeOneRepMaxHistoryTx(ctx, tx, *w, now); err != nil {
 		return err
+	}
+
+	// PR recompute. Union the new workout's exercises with the
+	// exercises whose PR rows or events still reference this workout
+	// — that union covers any exercise that could have been touched
+	// by the edit (added, removed, or had its sets changed).
+	affected, err := r.affectedExercisesForRecomputeTx(ctx, tx, w.ID)
+	if err != nil {
+		return err
+	}
+	for _, exerciseID := range ExercisesInWorkout(*w) {
+		affected[exerciseID] = struct{}{}
+	}
+	for exerciseID := range affected {
+		if err := r.recomputePersonalRecordTx(ctx, tx, w.UserID, exerciseID, now); err != nil {
+			return err
+		}
 	}
 
 	return tx.Commit()
@@ -279,6 +307,26 @@ func (r *SQLiteRepository) Delete(ctx context.Context, workoutID string) error {
 	defer tx.Rollback()
 
 	now := r.now().UTC()
+
+	// Look up the user_id before the soft delete fires; we need it to
+	// recompute affected PRs after the workout is gone.
+	var userID string
+	err = tx.QueryRowContext(ctx,
+		`SELECT user_id FROM workouts WHERE id = ? AND deleted_at IS NULL`,
+		workoutID).Scan(&userID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return ErrNotFound
+		}
+		return err
+	}
+
+	// Capture affected exercises BEFORE the soft delete so we don't
+	// race against the PR table queries below.
+	affected, err := r.affectedExercisesForRecomputeTx(ctx, tx, workoutID)
+	if err != nil {
+		return err
+	}
 
 	result, err := tx.ExecContext(ctx, `
 		UPDATE workouts
@@ -303,6 +351,14 @@ func (r *SQLiteRepository) Delete(ctx context.Context, workoutID string) error {
 	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM exercise_one_rep_max_history WHERE workout_id = ?`, workoutID); err != nil {
 		return err
+	}
+
+	// PR recompute. The recompute itself reads with `w.deleted_at IS
+	// NULL`, so the soft-deleted workout is correctly excluded.
+	for exerciseID := range affected {
+		if err := r.recomputePersonalRecordTx(ctx, tx, userID, exerciseID, now); err != nil {
+			return err
+		}
 	}
 
 	return tx.Commit()

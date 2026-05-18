@@ -1,6 +1,7 @@
 package workout
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -40,21 +41,25 @@ func NewHandler(repo Repository, exerciseRepo exercise.Repository) *Handler {
 func (h *Handler) Mount(r chi.Router) {
 	r.Route("/workouts", func(r chi.Router) {
 		r.Get("/", h.list)
-		// Registered before any /{id} routes so chi matches the literal
-		// "progression" segment instead of trying to interpret it as a
-		// workout ID. (Today there's no GET /{id} handler so the order
-		// doesn't strictly matter, but future-proof.)
+		// Registered before any /{id} routes so chi matches literal
+		// path segments instead of trying to interpret them as workout IDs.
 		r.Get("/progression", h.progression)
+		r.Get("/{id}", h.get)
 		r.Post("/", h.create)
 		r.Put("/{id}", h.update)
 		r.Delete("/{id}", h.delete)
 	})
+	r.Get("/personal-records", h.personalRecords)
 }
 
 // list handles GET /workouts. Returns the authed user's workouts, most
 // recent first. The repository caps results at 50; pagination and
 // filtering are intentionally not yet exposed (will be added when the
 // data volume actually warrants it).
+//
+// Each workout in the response carries any PR events it produced via
+// `personal_records_set`, so the frontend can badge sessions inline
+// without a second round trip.
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	userID, ok := auth.UserIDFrom(r.Context())
 	if !ok {
@@ -68,13 +73,53 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Normalize nil to empty slice so empty results render as "data": []
-	// rather than dropping the field via omitempty on the envelope.
-	if workouts == nil {
-		workouts = []Workout{}
+	wrapped, err := h.attachPersonalRecordEvents(r.Context(), workouts)
+	if err != nil {
+		httpresp.ServerError(w, r.Context(), "fetch personal record events", err)
+		return
+	}
+	if wrapped == nil {
+		wrapped = []workoutWithEvents{}
+	}
+	httpresp.OK(w, "listed workouts", wrapped)
+}
+
+// get handles GET /workouts/{id}. Returns a single workout owned by
+// the authed user, with any PR events it produced embedded as
+// `personal_records_set`. Ownership mismatches return 404 (not 403)
+// so workout IDs cannot be enumerated.
+func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
+	userID, ok := auth.UserIDFrom(r.Context())
+	if !ok {
+		httpresp.ServerError(w, r.Context(), "missing user in context", errors.New("auth middleware not applied"))
+		return
+	}
+	workoutID := chi.URLParam(r, "id")
+	if workoutID == "" {
+		httpresp.Error(w, http.StatusBadRequest, "workout id is required")
+		return
 	}
 
-	httpresp.OK(w, "listed workouts", workouts)
+	existing, err := h.repo.GetByID(r.Context(), workoutID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			httpresp.Error(w, http.StatusNotFound, "workout not found")
+			return
+		}
+		httpresp.ServerError(w, r.Context(), "get workout", err)
+		return
+	}
+	if existing.UserID != userID {
+		httpresp.Error(w, http.StatusNotFound, "workout not found")
+		return
+	}
+
+	wrapped, err := h.attachPersonalRecordEvents(r.Context(), []Workout{*existing})
+	if err != nil {
+		httpresp.ServerError(w, r.Context(), "fetch personal record events", err)
+		return
+	}
+	httpresp.OK(w, "fetched workout", wrapped[0])
 }
 
 // progression handles GET /workouts/progression — the muscle-group
@@ -442,4 +487,194 @@ func mapWorkoutValidationError(w http.ResponseWriter, err error) bool {
 		return true
 	}
 	return false
+}
+
+// --- Personal Records --------------------------------------------------
+
+// workoutWithEvents is the HTTP-shape wrapper that embeds the PR
+// events produced by a workout into its JSON representation. Kept out
+// of the Workout domain struct so the repository layer doesn't need
+// to know about HTTP-only fields.
+type workoutWithEvents struct {
+	Workout
+	PersonalRecordsSet []personalRecordEventDTO `json:"personal_records_set"`
+}
+
+// personalRecordEventDTO is the JSON shape for a PR break event. Defined
+// here (rather than as json tags on PersonalRecordEvent) so the
+// nullable previous_* fields serialize as proper JSON nulls instead
+// of being omitted via omitempty.
+type personalRecordEventDTO struct {
+	ID             string    `json:"id"`
+	ExerciseID     string    `json:"exercise_id"`
+	WorkoutID      string    `json:"workout_id"`
+	Weight         float64   `json:"weight"`
+	Reps           int       `json:"reps"`
+	Unit           string    `json:"unit"`
+	PreviousWeight *float64  `json:"previous_weight"`
+	PreviousReps   *int      `json:"previous_reps"`
+	PreviousUnit   *string   `json:"previous_unit"`
+	AchievedAt     time.Time `json:"achieved_at"`
+}
+
+func eventToDTO(e PersonalRecordEvent) personalRecordEventDTO {
+	dto := personalRecordEventDTO{
+		ID:             e.ID,
+		ExerciseID:     e.ExerciseID,
+		WorkoutID:      e.WorkoutID,
+		Weight:         e.Weight,
+		Reps:           e.Reps,
+		Unit:           string(e.Unit),
+		PreviousWeight: e.PreviousWeight,
+		PreviousReps:   e.PreviousReps,
+		AchievedAt:     e.AchievedAt,
+	}
+	if e.PreviousUnit != nil {
+		u := string(*e.PreviousUnit)
+		dto.PreviousUnit = &u
+	}
+	return dto
+}
+
+// attachPersonalRecordEvents wraps a slice of workouts with their PR
+// events in a single bulk fetch. Used by the workout list and detail
+// handlers so the frontend can badge PR-breaking sessions inline
+// without making per-workout queries.
+func (h *Handler) attachPersonalRecordEvents(
+	ctx context.Context,
+	workouts []Workout,
+) ([]workoutWithEvents, error) {
+	if len(workouts) == 0 {
+		return []workoutWithEvents{}, nil
+	}
+	ids := make([]string, len(workouts))
+	for i, w := range workouts {
+		ids[i] = w.ID
+	}
+	events, err := h.repo.ListPersonalRecordEventsByWorkouts(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	byWorkout := make(map[string][]personalRecordEventDTO)
+	for _, e := range events {
+		byWorkout[e.WorkoutID] = append(byWorkout[e.WorkoutID], eventToDTO(e))
+	}
+	out := make([]workoutWithEvents, len(workouts))
+	for i, w := range workouts {
+		out[i] = workoutWithEvents{
+			Workout:            w,
+			PersonalRecordsSet: byWorkout[w.ID],
+		}
+		if out[i].PersonalRecordsSet == nil {
+			out[i].PersonalRecordsSet = []personalRecordEventDTO{}
+		}
+	}
+	return out, nil
+}
+
+// personalRecordDTO is the JSON shape for one row of the
+// /personal-records response. Carries the PR row's fields plus the
+// computed current_estimated_1rm for the same exercise. Nullable
+// fields use pointers so JSON renders null rather than zero values.
+type personalRecordDTO struct {
+	ExerciseID          string     `json:"exercise_id"`
+	ExerciseName        string     `json:"exercise_name"`
+	WorkoutID           *string    `json:"workout_id"`
+	Weight              *float64   `json:"weight"`
+	Reps                *int       `json:"reps"`
+	Unit                *string    `json:"unit"`
+	AchievedAt          *time.Time `json:"achieved_at"`
+	CurrentEstimated1RM *float64   `json:"current_estimated_1rm"`
+	Estimated1RMUnit    *string    `json:"estimated_1rm_unit"`
+}
+
+// personalRecords handles GET /personal-records.
+//
+// Returns one row per headline lift in HeadlineLifts order. Headline
+// lifts the user has never trained still appear, with PR fields set
+// to null — the frontend renders empty-state cards from these rows.
+// The current_estimated_1rm field is computed per request from the
+// 1RM history table; it is not stored.
+func (h *Handler) personalRecords(w http.ResponseWriter, r *http.Request) {
+	userID, ok := auth.UserIDFrom(r.Context())
+	if !ok {
+		httpresp.ServerError(w, r.Context(), "missing user in context", errors.New("auth middleware not applied"))
+		return
+	}
+
+	// Build a quick lookup of the user's existing PRs.
+	prs, err := h.repo.ListPersonalRecords(r.Context(), userID)
+	if err != nil {
+		httpresp.ServerError(w, r.Context(), "list personal records", err)
+		return
+	}
+	byExercise := make(map[string]PersonalRecord, len(prs))
+	for _, pr := range prs {
+		byExercise[pr.ExerciseID] = pr
+	}
+
+	// Resolve exercise display names from the catalog.
+	exerciseNames := make(map[string]string, len(HeadlineLifts))
+	for _, slug := range HeadlineLifts {
+		ex, err := h.exerciseRepo.GetByID(r.Context(), slug)
+		if err == nil {
+			exerciseNames[slug] = ex.Name
+		} else {
+			// Catalog mismatch — the unit test guards against this, but
+			// fall back to the slug so the row still renders something
+			// rather than crashing the request.
+			exerciseNames[slug] = slug
+		}
+	}
+
+	now := time.Now()
+	until := now
+	since := until.Add(-DefaultBaselineWindow)
+
+	out := make([]personalRecordDTO, 0, len(HeadlineLifts))
+	for _, slug := range HeadlineLifts {
+		dto := personalRecordDTO{
+			ExerciseID:   slug,
+			ExerciseName: exerciseNames[slug],
+		}
+
+		if pr, ok := byExercise[slug]; ok {
+			weight := pr.Weight
+			reps := pr.Reps
+			unit := string(pr.Unit)
+			workoutID := pr.WorkoutID
+			achievedAt := pr.AchievedAt
+			dto.Weight = &weight
+			dto.Reps = &reps
+			dto.Unit = &unit
+			dto.WorkoutID = &workoutID
+			dto.AchievedAt = &achievedAt
+		}
+
+		// Compute the current recency-weighted estimated 1RM from the
+		// 1RM history table. Not stored; cheap to compute on demand.
+		entries, err := h.repo.ListOneRepMaxHistory(r.Context(), userID, slug, &since, &until)
+		if err != nil {
+			httpresp.ServerError(w, r.Context(), "list one rep max history", err)
+			return
+		}
+		if baseline, ok := RecencyWeightedBaseline(entries, now, DefaultBaselineWindow, DefaultBaselineTau); ok {
+			rounded := round1(baseline)
+			dto.CurrentEstimated1RM = &rounded
+			// Unit of the baseline mirrors the most-recent in-window
+			// entry's unit, which is the same convention used in the
+			// muscle-group progression handler.
+			for _, e := range entries {
+				if !e.PerformedAt.Before(now.Add(-DefaultBaselineWindow)) {
+					u := string(e.Unit)
+					dto.Estimated1RMUnit = &u
+					break
+				}
+			}
+		}
+
+		out = append(out, dto)
+	}
+
+	httpresp.OK(w, "listed personal records", out)
 }

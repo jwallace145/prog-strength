@@ -41,6 +41,17 @@ type Repository interface {
 	// for design rationale. Pair with RecencyWeightedBaseline to compute
 	// the user's current capability on the exercise.
 	ListOneRepMaxHistory(ctx context.Context, userID, exerciseID string, since, until *time.Time) ([]OneRepMaxEntry, error)
+
+	// ListPersonalRecords returns the authed user's personal records,
+	// sorted by achieved_at DESC. Empty slice when the user has none.
+	// See prog-strength-docs/sows/personal-records.md.
+	ListPersonalRecords(ctx context.Context, userID string) ([]PersonalRecord, error)
+
+	// ListPersonalRecordEventsByWorkouts returns every PR break event
+	// whose workout_id is in the given slice. Empty input returns an
+	// empty slice. Used by the workout list endpoint to embed
+	// `personal_records_set` per workout in a single bulk query.
+	ListPersonalRecordEventsByWorkouts(ctx context.Context, workoutIDs []string) ([]PersonalRecordEvent, error)
 }
 
 // ListOptions controls pagination and filtering for list operations.
