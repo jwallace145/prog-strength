@@ -1,3 +1,10 @@
+# [0.15.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.14.0...v0.15.0) (2026-05-18)
+
+
+### Features
+
+* **progress:** base 1RM baseline on per-workout max, not avg ([8e62d41](https://github.com/Prog-Strength/prog-strength-api/commit/8e62d413c1eb3d4ed9c393afdb923f3c3f4524d1))
+
 # [0.14.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.13.0...v0.14.0) (2026-05-18)
 
 
