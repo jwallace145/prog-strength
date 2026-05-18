@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -52,10 +53,26 @@ func (h *Handler) Mount(r chi.Router) {
 	r.Get("/personal-records", h.personalRecords)
 }
 
-// list handles GET /workouts. Returns the authed user's workouts, most
-// recent first. The repository caps results at 50; pagination and
-// filtering are intentionally not yet exposed (will be added when the
-// data volume actually warrants it).
+// workoutListResponse is the data envelope for GET /workouts. Wraps
+// the page of workouts in pagination metadata so the frontend can
+// render "showing N–M of TOTAL" and disable Previous/Next at the
+// edges of the result set.
+type workoutListResponse struct {
+	Items   []workoutWithEvents `json:"items"`
+	Total   int                 `json:"total"`
+	Limit   int                 `json:"limit"`
+	Offset  int                 `json:"offset"`
+	HasMore bool                `json:"has_more"`
+}
+
+// list handles GET /workouts. Returns a page of the authed user's
+// workouts, most recent first.
+//
+// Query params (all optional):
+//   - since (RFC3339): only workouts performed at or after this time
+//   - until (RFC3339): only workouts performed at or before this time
+//   - limit (1–100): page size, default 50
+//   - offset (≥0): rows to skip, default 0
 //
 // Each workout in the response carries any PR events it produced via
 // `personal_records_set`, so the frontend can badge sessions inline
@@ -67,9 +84,20 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	workouts, err := h.repo.ListByUser(r.Context(), userID, ListOptions{})
+	opts, err := parseWorkoutListOptions(r)
+	if err != nil {
+		httpresp.Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	workouts, err := h.repo.ListByUser(r.Context(), userID, opts)
 	if err != nil {
 		httpresp.ServerError(w, r.Context(), "list workouts", err)
+		return
+	}
+	total, err := h.repo.CountByUser(r.Context(), userID, opts)
+	if err != nil {
+		httpresp.ServerError(w, r.Context(), "count workouts", err)
 		return
 	}
 
@@ -81,7 +109,60 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	if wrapped == nil {
 		wrapped = []workoutWithEvents{}
 	}
-	httpresp.OK(w, "listed workouts", wrapped)
+
+	// Echo the effective limit/offset so the caller doesn't have to
+	// remember what defaults the server applied.
+	effectiveLimit := opts.Limit
+	if effectiveLimit <= 0 {
+		effectiveLimit = 50
+	}
+	resp := workoutListResponse{
+		Items:   wrapped,
+		Total:   total,
+		Limit:   effectiveLimit,
+		Offset:  opts.Offset,
+		HasMore: opts.Offset+len(wrapped) < total,
+	}
+	httpresp.OK(w, "listed workouts", resp)
+}
+
+// parseWorkoutListOptions reads pagination + timeframe query params
+// off the request, validating ranges and timestamp formats. Returns
+// a 400-shaped error message on bad input — the caller surfaces it.
+func parseWorkoutListOptions(r *http.Request) (ListOptions, error) {
+	q := r.URL.Query()
+	opts := ListOptions{}
+
+	if s := q.Get("since"); s != "" {
+		t, err := time.Parse(time.RFC3339, s)
+		if err != nil {
+			return opts, errors.New("invalid since: must be RFC3339 format")
+		}
+		opts.Since = &t
+	}
+	if s := q.Get("until"); s != "" {
+		t, err := time.Parse(time.RFC3339, s)
+		if err != nil {
+			return opts, errors.New("invalid until: must be RFC3339 format")
+		}
+		opts.Until = &t
+	}
+	if s := q.Get("limit"); s != "" {
+		n, err := strconv.Atoi(s)
+		if err != nil || n < 1 || n > 100 {
+			return opts, errors.New("invalid limit: must be 1–100")
+		}
+		opts.Limit = n
+	}
+	if s := q.Get("offset"); s != "" {
+		n, err := strconv.Atoi(s)
+		if err != nil || n < 0 {
+			return opts, errors.New("invalid offset: must be ≥ 0")
+		}
+		opts.Offset = n
+	}
+
+	return opts, nil
 }
 
 // get handles GET /workouts/{id}. Returns a single workout owned by

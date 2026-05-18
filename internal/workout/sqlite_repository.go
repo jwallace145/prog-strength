@@ -183,6 +183,32 @@ func (r *SQLiteRepository) ListByUser(ctx context.Context, userID string, opts L
 	return workouts, rows.Err()
 }
 
+func (r *SQLiteRepository) CountByUser(
+	ctx context.Context,
+	userID string,
+	opts ListOptions,
+) (int, error) {
+	query := `
+		SELECT COUNT(*)
+		FROM workouts
+		WHERE user_id = ? AND deleted_at IS NULL
+	`
+	args := []interface{}{userID}
+	if opts.Since != nil {
+		query += " AND performed_at >= ?"
+		args = append(args, *opts.Since)
+	}
+	if opts.Until != nil {
+		query += " AND performed_at <= ?"
+		args = append(args, *opts.Until)
+	}
+	var n int
+	if err := r.db.QueryRowContext(ctx, query, args...).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
 func (r *SQLiteRepository) Update(ctx context.Context, w *Workout) error {
 	if err := w.Validate(); err != nil {
 		return err

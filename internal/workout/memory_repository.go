@@ -112,6 +112,30 @@ func (r *MemoryRepository) ListByUser(ctx context.Context, userID string, opts L
 	return results[opts.Offset:end], nil
 }
 
+func (r *MemoryRepository) CountByUser(
+	ctx context.Context,
+	userID string,
+	opts ListOptions,
+) (int, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	count := 0
+	for _, w := range r.workouts {
+		if w.UserID != userID || w.DeletedAt != nil {
+			continue
+		}
+		if opts.Since != nil && w.PerformedAt.Before(*opts.Since) {
+			continue
+		}
+		if opts.Until != nil && w.PerformedAt.After(*opts.Until) {
+			continue
+		}
+		count++
+	}
+	return count, nil
+}
+
 func (r *MemoryRepository) Update(ctx context.Context, w *Workout) error {
 	if err := w.Validate(); err != nil {
 		return err
