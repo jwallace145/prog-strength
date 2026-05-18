@@ -35,14 +35,15 @@ func New(cfg config.Config) (*Server, error) {
 	// pattern from chi's RouteContext.
 	r.Use(MetricsMiddleware)
 
-	// Prometheus scrape target. Reachable only from inside the Docker
-	// network — the Caddy layer refuses to proxy /metrics to the
-	// public internet.
-	r.Handle("/metrics", MetricsHandler())
-
 	// CORS: only matters for cross-origin browser fetches. curl/Postman/
 	// server-to-server calls are unaffected (no browser, no CORS check).
 	// Empty CORSAllowedOrigin disables cross-origin browser access entirely.
+	//
+	// IMPORTANT: this conditional r.Use must run BEFORE any route is
+	// registered. chi enforces "all middleware before any route" — if a
+	// route registration intervenes, this Use panics at startup. Hidden
+	// failure mode in local dev where CORS_ALLOWED_ORIGIN is unset
+	// (the block is skipped, no panic); only fires in prod.
 	if cfg.CORSAllowedOrigin != "" {
 		r.Use(cors.Handler(cors.Options{
 			AllowedOrigins:   []string{cfg.CORSAllowedOrigin},
@@ -53,6 +54,14 @@ func New(cfg config.Config) (*Server, error) {
 		}))
 		log.Printf("cors: allowing origin %s", cfg.CORSAllowedOrigin)
 	}
+
+	// --- All r.Use() calls must be above this line. ---
+	// Routes follow.
+
+	// Prometheus scrape target. Reachable only from inside the Docker
+	// network — the Caddy layer refuses to proxy /metrics to the
+	// public internet.
+	r.Handle("/metrics", MetricsHandler())
 
 	// Health check.
 	r.Get("/health", HealthCheck)
