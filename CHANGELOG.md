@@ -1,3 +1,10 @@
+## [0.21.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.21.0...v0.21.1) (2026-05-18)
+
+
+### Bug Fixes
+
+* **server:** register /metrics after all middleware so prod doesn't panic ([2da79e8](https://github.com/Prog-Strength/prog-strength-api/commit/2da79e86ce5aa40b946ec31fdf34771731898eec))
+
 # [0.21.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.20.0...v0.21.0) (2026-05-18)
 
 
