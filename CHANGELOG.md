@@ -1,3 +1,10 @@
+# [0.21.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.20.0...v0.21.0) (2026-05-18)
+
+
+### Features
+
+* **telemetry:** foundation for agent observability ([42ed81c](https://github.com/Prog-Strength/prog-strength-api/commit/42ed81cbd330ef396c933dca108470f23b1ba5eb))
+
 # [0.20.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.19.1...v0.20.0) (2026-05-18)
 
 
