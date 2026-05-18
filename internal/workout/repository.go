@@ -30,6 +30,17 @@ type Repository interface {
 	// Delete soft-deletes a workout by setting DeletedAt.
 	// Returns ErrNotFound if the workout doesn't exist or is already deleted.
 	Delete(ctx context.Context, id string) error
+
+	// ListOneRepMaxHistory returns the user's per-workout estimated 1RM
+	// entries for a single exercise, sorted most recent first. Optional
+	// since/until bounds filter on performed_at. Returns an empty slice
+	// when the user has no entries for the exercise.
+	//
+	// This is the read side of the exercise_one_rep_max_history table;
+	// see prog-strength-docs/sows/estimated-one-rep-max-time-series-table.md
+	// for design rationale. Pair with RecencyWeightedBaseline to compute
+	// the user's current capability on the exercise.
+	ListOneRepMaxHistory(ctx context.Context, userID, exerciseID string, since, until *time.Time) ([]OneRepMaxEntry, error)
 }
 
 // ListOptions controls pagination and filtering for list operations.

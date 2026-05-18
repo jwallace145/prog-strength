@@ -67,12 +67,20 @@ func New(cfg config.Config) (*Server, error) {
 
 		// Create SQLite repositories.
 		exerciseRepo = exercise.NewSQLiteRepository(database)
-		workoutRepo = workout.NewSQLiteRepository(database)
+		sqliteWorkoutRepo := workout.NewSQLiteRepository(database)
+		workoutRepo = sqliteWorkoutRepo
 		userRepo = user.NewSQLiteRepository(database)
 
 		// Sync exercise catalog: catalog.go is the source of truth; this
 		// upserts new entries and updates non-key fields on existing ones.
 		if err := exerciseRepo.(*exercise.SQLiteRepository).SyncCatalog(context.Background(), exercise.Catalog); err != nil {
+			return nil, err
+		}
+
+		// Backfill the 1RM history table for any workouts that existed
+		// before this feature shipped. No-op when the table is already
+		// populated, so it stays cheap on every subsequent startup.
+		if err := sqliteWorkoutRepo.BackfillOneRepMaxHistory(context.Background()); err != nil {
 			return nil, err
 		}
 	} else {

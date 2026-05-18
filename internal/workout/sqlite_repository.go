@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"log"
 	"time"
 
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/id"
@@ -80,6 +81,13 @@ func (r *SQLiteRepository) Create(ctx context.Context, w *Workout) error {
 				return err
 			}
 		}
+	}
+
+	// Derived 1RM history. AggregateOneRepMax is pure, so the same call
+	// covers create here and update below — keeping the live write path
+	// in lockstep with the backfill aggregation.
+	if err := r.writeOneRepMaxHistoryTx(ctx, tx, *w, now); err != nil {
+		return err
 	}
 
 	return tx.Commit()
@@ -248,18 +256,35 @@ func (r *SQLiteRepository) Update(ctx context.Context, w *Workout) error {
 		}
 	}
 
+	// Replace derived 1RM history rows for this workout. Update is full-
+	// replacement on the workout side, so the history rows have to be
+	// regenerated from the new shape; delete-then-insert is simpler than
+	// trying to compute a diff.
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM exercise_one_rep_max_history WHERE workout_id = ?`, w.ID); err != nil {
+		return err
+	}
+	if err := r.writeOneRepMaxHistoryTx(ctx, tx, *w, r.now().UTC()); err != nil {
+		return err
+	}
+
 	return tx.Commit()
 }
 
-func (r *SQLiteRepository) Delete(ctx context.Context, id string) error {
+func (r *SQLiteRepository) Delete(ctx context.Context, workoutID string) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
 	now := r.now().UTC()
 
-	result, err := r.db.ExecContext(ctx, `
+	result, err := tx.ExecContext(ctx, `
 		UPDATE workouts
 		SET deleted_at = ?, updated_at = ?
 		WHERE id = ? AND deleted_at IS NULL
-	`, now, now, id)
-
+	`, now, now, workoutID)
 	if err != nil {
 		return err
 	}
@@ -272,7 +297,15 @@ func (r *SQLiteRepository) Delete(ctx context.Context, id string) error {
 		return ErrNotFound
 	}
 
-	return nil
+	// History rows are derived and not soft-deleted — hard delete keeps
+	// baseline queries from having to filter by workout state at read
+	// time. Safe because the table is fully rebuildable from `workouts`.
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM exercise_one_rep_max_history WHERE workout_id = ?`, workoutID); err != nil {
+		return err
+	}
+
+	return tx.Commit()
 }
 
 // getWorkoutExercises loads all exercises and their sets for a workout.
@@ -334,4 +367,172 @@ func (r *SQLiteRepository) getSets(ctx context.Context, workoutExerciseID int64)
 	}
 
 	return sets, rows.Err()
+}
+
+// writeOneRepMaxHistoryTx inserts the derived 1RM history rows for a
+// workout into the given transaction. Used by Create and Update so the
+// same aggregation function services both. Stable timestamp passed in
+// rather than read from r.now so create/update use a single instant.
+func (r *SQLiteRepository) writeOneRepMaxHistoryTx(ctx context.Context, tx *sql.Tx, w Workout, now time.Time) error {
+	for _, e := range AggregateOneRepMax(w) {
+		e.ID = id.New()
+		e.CreatedAt = now
+		e.UpdatedAt = now
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO exercise_one_rep_max_history (
+				id, user_id, workout_id, exercise_id, performed_at,
+				min_estimated_1rm, avg_estimated_1rm, max_estimated_1rm,
+				set_count, unit, created_at, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, e.ID, e.UserID, e.WorkoutID, e.ExerciseID, e.PerformedAt,
+			e.MinEstimated1RM, e.AvgEstimated1RM, e.MaxEstimated1RM,
+			e.SetCount, string(e.Unit), e.CreatedAt, e.UpdatedAt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *SQLiteRepository) ListOneRepMaxHistory(
+	ctx context.Context,
+	userID, exerciseID string,
+	since, until *time.Time,
+) ([]OneRepMaxEntry, error) {
+	query := `
+		SELECT id, user_id, workout_id, exercise_id, performed_at,
+		       min_estimated_1rm, avg_estimated_1rm, max_estimated_1rm,
+		       set_count, unit, created_at, updated_at
+		FROM exercise_one_rep_max_history
+		WHERE user_id = ? AND exercise_id = ?
+	`
+	args := []interface{}{userID, exerciseID}
+	if since != nil {
+		query += " AND performed_at >= ?"
+		args = append(args, *since)
+	}
+	if until != nil {
+		query += " AND performed_at <= ?"
+		args = append(args, *until)
+	}
+	query += " ORDER BY performed_at DESC"
+
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []OneRepMaxEntry
+	for rows.Next() {
+		var e OneRepMaxEntry
+		var unit string
+		if err := rows.Scan(
+			&e.ID, &e.UserID, &e.WorkoutID, &e.ExerciseID, &e.PerformedAt,
+			&e.MinEstimated1RM, &e.AvgEstimated1RM, &e.MaxEstimated1RM,
+			&e.SetCount, &unit, &e.CreatedAt, &e.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		e.Unit = user.WeightUnit(unit)
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// BackfillOneRepMaxHistory populates the 1RM history table from existing
+// workouts when the table is empty. Idempotent — safe to call on every
+// startup; second and subsequent calls find a non-empty table and exit.
+//
+// Lives in Go (rather than the SQL migration) so it can share the same
+// AggregateOneRepMax function used by the live write path. That shared-
+// function invariant is the load-bearing piece — without it backfilled
+// rows could subtly disagree with rows written by Create/Update.
+//
+// Runs in a single transaction so a partial population is impossible.
+func (r *SQLiteRepository) BackfillOneRepMaxHistory(ctx context.Context) error {
+	var existing int
+	if err := r.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM exercise_one_rep_max_history`).Scan(&existing); err != nil {
+		return err
+	}
+	if existing > 0 {
+		return nil
+	}
+
+	workouts, err := r.listAllWorkoutsForBackfill(ctx)
+	if err != nil {
+		return err
+	}
+	if len(workouts) == 0 {
+		return nil
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	now := r.now().UTC()
+	inserted := 0
+	for _, w := range workouts {
+		for _, e := range AggregateOneRepMax(w) {
+			e.ID = id.New()
+			e.CreatedAt = now
+			e.UpdatedAt = now
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO exercise_one_rep_max_history (
+					id, user_id, workout_id, exercise_id, performed_at,
+					min_estimated_1rm, avg_estimated_1rm, max_estimated_1rm,
+					set_count, unit, created_at, updated_at
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			`, e.ID, e.UserID, e.WorkoutID, e.ExerciseID, e.PerformedAt,
+				e.MinEstimated1RM, e.AvgEstimated1RM, e.MaxEstimated1RM,
+				e.SetCount, string(e.Unit), e.CreatedAt, e.UpdatedAt); err != nil {
+				return err
+			}
+			inserted++
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	log.Printf("backfill: inserted %d one-rep-max history rows from %d workouts", inserted, len(workouts))
+	return nil
+}
+
+// listAllWorkoutsForBackfill loads every non-deleted workout with its
+// exercises and sets. Used only by BackfillOneRepMaxHistory — production
+// reads go through ListByUser.
+func (r *SQLiteRepository) listAllWorkoutsForBackfill(ctx context.Context) ([]Workout, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, user_id, performed_at
+		FROM workouts
+		WHERE deleted_at IS NULL
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var workouts []Workout
+	for rows.Next() {
+		var w Workout
+		if err := rows.Scan(&w.ID, &w.UserID, &w.PerformedAt); err != nil {
+			return nil, err
+		}
+		workouts = append(workouts, w)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	for i := range workouts {
+		ex, err := r.getWorkoutExercises(ctx, workouts[i].ID)
+		if err != nil {
+			return nil, err
+		}
+		workouts[i].Exercises = ex
+	}
+	return workouts, nil
 }
