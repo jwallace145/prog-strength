@@ -141,13 +141,22 @@ const (
 )
 
 // RecencyWeightedBaseline returns the time-weighted moving average of
-// entries.AvgEstimated1RM as of `at`, using the exponential decay
+// entries.MaxEstimated1RM as of `at`, using the exponential decay
 //
 //	weight = exp( -(at - performed_at) / tau )
 //
 // for each entry whose performed_at lies in the window (at-window, at].
 // The second return value is false when no entry falls inside the
 // window — callers can choose to render an empty state.
+//
+// The per-workout MAX is used (not avg) because the avg across a
+// workout's sets is dragged down by warmup sets, which has nothing to
+// do with the lifter's actual capability. Max is almost always one of
+// the working sets, so it tracks the load that answers "what could
+// this person do today?" without polluting the signal with warmup
+// protocol drift. A future warmup-flag-on-sets feature can replace
+// this with "working-set average" and the function signature won't
+// change.
 //
 // Pure function: no time.Now, no IO. Exhaustively testable and shared
 // by every consumer of the baseline so future tuning lives in one place.
@@ -168,7 +177,7 @@ func RecencyWeightedBaseline(
 		}
 		age := at.Sub(e.PerformedAt)
 		w := math.Exp(-float64(age) / float64(tau))
-		weightedSum += w * e.AvgEstimated1RM
+		weightedSum += w * e.MaxEstimated1RM
 		weightSum += w
 	}
 	if weightSum == 0 {

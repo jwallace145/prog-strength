@@ -8,15 +8,18 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
 )
 
-// helper: build an OneRepMaxEntry with sensible defaults.
-func entry(performedAt time.Time, avg float64) OneRepMaxEntry {
+// helper: build an OneRepMaxEntry with sensible defaults. All three
+// per-set aggregates are set to the same `value` so the tests are
+// agnostic about which one the baseline math reads — the actual
+// production code uses MaxEstimated1RM.
+func entry(performedAt time.Time, value float64) OneRepMaxEntry {
 	return OneRepMaxEntry{
 		WorkoutID:       "w-" + performedAt.Format("20060102"),
 		ExerciseID:      "x",
 		PerformedAt:     performedAt,
-		MinEstimated1RM: avg - 5,
-		AvgEstimated1RM: avg,
-		MaxEstimated1RM: avg + 5,
+		MinEstimated1RM: value,
+		AvgEstimated1RM: value,
+		MaxEstimated1RM: value,
 		SetCount:        3,
 		Unit:            user.WeightUnitPounds,
 	}
@@ -88,8 +91,8 @@ func TestComputeMuscleGroupProgression_SingleExerciseNormalized(t *testing.T) {
 		t.Fatalf("expected 3 points, got %d", len(result.Points))
 	}
 	for _, p := range result.Points {
-		if math.Abs(p.NormalizedAvg-1.0) > 0.001 {
-			t.Errorf("constant series should normalize to 1.0; got %v for %s", p.NormalizedAvg, p.PerformedAt)
+		if math.Abs(p.NormalizedMax-1.0) > 0.001 {
+			t.Errorf("constant series should normalize to 1.0; got %v for %s", p.NormalizedMax, p.PerformedAt)
 		}
 	}
 	if len(result.ExerciseBaselines) != 1 {
@@ -132,8 +135,8 @@ func TestComputeMuscleGroupProgression_MultipleExercisesShareAxis(t *testing.T) 
 		t.Fatalf("expected 4 points across both exercises, got %d", len(result.Points))
 	}
 	for _, p := range result.Points {
-		if math.Abs(p.NormalizedAvg-1.0) > 0.01 {
-			t.Errorf("normalized value should be ~1.0 regardless of exercise scale; got %v for %s", p.NormalizedAvg, p.ExerciseName)
+		if math.Abs(p.NormalizedMax-1.0) > 0.01 {
+			t.Errorf("normalized value should be ~1.0 regardless of exercise scale; got %v for %s", p.NormalizedMax, p.ExerciseName)
 		}
 	}
 }

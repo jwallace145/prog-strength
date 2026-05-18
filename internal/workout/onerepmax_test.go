@@ -210,7 +210,7 @@ func TestRecencyWeightedBaseline_Empty(t *testing.T) {
 func TestRecencyWeightedBaseline_AllOutsideWindow(t *testing.T) {
 	at := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
 	entries := []OneRepMaxEntry{
-		{PerformedAt: at.Add(-200 * 24 * time.Hour), AvgEstimated1RM: 200},
+		{PerformedAt: at.Add(-200 * 24 * time.Hour), MaxEstimated1RM: 200},
 	}
 	_, ok := RecencyWeightedBaseline(entries, at, DefaultBaselineWindow, DefaultBaselineTau)
 	if ok {
@@ -221,7 +221,7 @@ func TestRecencyWeightedBaseline_AllOutsideWindow(t *testing.T) {
 func TestRecencyWeightedBaseline_SingleEntryReturnsItself(t *testing.T) {
 	at := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
 	entries := []OneRepMaxEntry{
-		{PerformedAt: at.Add(-7 * 24 * time.Hour), AvgEstimated1RM: 217.3},
+		{PerformedAt: at.Add(-7 * 24 * time.Hour), MaxEstimated1RM: 217.3},
 	}
 	got, ok := RecencyWeightedBaseline(entries, at, DefaultBaselineWindow, DefaultBaselineTau)
 	if !ok {
@@ -239,8 +239,8 @@ func TestRecencyWeightedBaseline_MoreRecentWeightedMore(t *testing.T) {
 	// with different values weighted by recency should produce a result
 	// closer to the recent one than a simple average would.
 	entries := []OneRepMaxEntry{
-		{PerformedAt: at.Add(-3 * 24 * time.Hour), AvgEstimated1RM: 220}, // recent
-		{PerformedAt: at.Add(-80 * 24 * time.Hour), AvgEstimated1RM: 180}, // old
+		{PerformedAt: at.Add(-3 * 24 * time.Hour), MaxEstimated1RM: 220}, // recent
+		{PerformedAt: at.Add(-80 * 24 * time.Hour), MaxEstimated1RM: 180}, // old
 	}
 	got, ok := RecencyWeightedBaseline(entries, at, DefaultBaselineWindow, DefaultBaselineTau)
 	if !ok {
@@ -266,12 +266,12 @@ func TestRecencyWeightedBaseline_DeloadIsBounded(t *testing.T) {
 	deloadValue := normal * 0.9
 
 	entries := []OneRepMaxEntry{
-		{PerformedAt: at, AvgEstimated1RM: deloadValue}, // today's deload
+		{PerformedAt: at, MaxEstimated1RM: deloadValue}, // today's deload
 	}
 	for i := 1; i <= 12; i++ {
 		entries = append(entries, OneRepMaxEntry{
 			PerformedAt:     at.Add(-time.Duration(i) * 7 * 24 * time.Hour),
-			AvgEstimated1RM: normal,
+			MaxEstimated1RM: normal,
 		})
 	}
 
@@ -289,8 +289,8 @@ func TestRecencyWeightedBaseline_DeloadIsBounded(t *testing.T) {
 func TestRecencyWeightedBaseline_FutureEntryExcluded(t *testing.T) {
 	at := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
 	entries := []OneRepMaxEntry{
-		{PerformedAt: at.Add(24 * time.Hour), AvgEstimated1RM: 999}, // future
-		{PerformedAt: at.Add(-1 * time.Hour), AvgEstimated1RM: 200},
+		{PerformedAt: at.Add(24 * time.Hour), MaxEstimated1RM: 999}, // future
+		{PerformedAt: at.Add(-1 * time.Hour), MaxEstimated1RM: 200},
 	}
 	got, _ := RecencyWeightedBaseline(entries, at, DefaultBaselineWindow, DefaultBaselineTau)
 	if math.Abs(got-200) > 0.5 {
