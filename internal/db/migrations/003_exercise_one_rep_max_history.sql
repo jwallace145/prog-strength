@@ -3,7 +3,7 @@
 -- estimated 1RM rolled up to min/avg/max for that exercise within that
 -- workout. The table is fully derived from `workouts` — every workout
 -- write produces a corresponding write here. See
--- prog-strength-docs/sows/estimated-one-rep-max-time-series-table.md
+-- prog-strength-docs/sows/estimated-one-rep-max.md
 -- for the full rationale.
 --
 -- The table is created empty here; an in-process backfill runs on the

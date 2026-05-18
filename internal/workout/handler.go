@@ -226,7 +226,7 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 // baseline, normalizes every historical entry against it, and emits
 // one point per (workout, exercise) pair. The frontend plots
 // everything on a single normalized axis. See
-// prog-strength-docs/sows/estimated-one-rep-max-time-series-table.md
+// prog-strength-docs/sows/estimated-one-rep-max.md
 // for the full rationale.
 func (h *Handler) progression(w http.ResponseWriter, r *http.Request) {
 	userID, ok := auth.UserIDFrom(r.Context())

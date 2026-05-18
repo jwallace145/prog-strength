@@ -11,7 +11,7 @@ import (
 // recency-weighted baseline so disparate exercises within a muscle
 // group can be plotted on a single comparable Y-axis.
 //
-// See prog-strength-docs/sows/estimated-one-rep-max-time-series-table.md
+// See prog-strength-docs/sows/estimated-one-rep-max.md
 // for the full design rationale. The short version: a lifter's chest
 // strength is a single thing, but the absolute 1RM on barbell bench
 // vs dumbbell bench vs cable fly lives on different scales. Dividing

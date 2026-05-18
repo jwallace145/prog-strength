@@ -43,7 +43,7 @@ type Repository interface {
 	// when the user has no entries for the exercise.
 	//
 	// This is the read side of the exercise_one_rep_max_history table;
-	// see prog-strength-docs/sows/estimated-one-rep-max-time-series-table.md
+	// see prog-strength-docs/sows/estimated-one-rep-max.md
 	// for design rationale. Pair with RecencyWeightedBaseline to compute
 	// the user's current capability on the exercise.
 	ListOneRepMaxHistory(ctx context.Context, userID, exerciseID string, since, until *time.Time) ([]OneRepMaxEntry, error)
