@@ -8,6 +8,29 @@ import (
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/user"
 )
 
+func TestEpleyOneRM(t *testing.T) {
+	tests := []struct {
+		name   string
+		weight float64
+		reps   int
+		want   float64
+	}{
+		{"single rep is the lift itself", 225, 1, 225},
+		{"zero reps clamped to weight", 225, 0, 225},
+		{"five reps at 185", 185, 5, 185 * (1 + 5.0/30.0)},
+		{"ten reps at 135", 135, 10, 135 * (1 + 10.0/30.0)},
+		{"bodyweight (weight=0) stays 0", 0, 8, 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := EpleyOneRM(tc.weight, tc.reps)
+			if math.Abs(got-tc.want) > 0.001 {
+				t.Errorf("got %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestAggregateOneRepMax_Empty(t *testing.T) {
 	entries := AggregateOneRepMax(Workout{ID: "w1", UserID: "u1"})
 	if len(entries) != 0 {

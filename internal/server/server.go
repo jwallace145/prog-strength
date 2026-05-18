@@ -114,10 +114,11 @@ func New(cfg config.Config) (*Server, error) {
 
 	// Workout routes — require a valid JWT. Group ensures the middleware
 	// only applies to routes mounted inside it, leaving /health and
-	// /exercises public.
+	// /exercises public. The progression endpoint needs the exercise
+	// catalog to resolve a muscle_group filter to its member exercises.
 	r.Group(func(r chi.Router) {
 		r.Use(auth.RequireUser(jwtSecret))
-		workout.NewHandler(workoutRepo).Mount(r)
+		workout.NewHandler(workoutRepo, exerciseRepo).Mount(r)
 	})
 
 	return &Server{

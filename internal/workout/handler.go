@@ -9,17 +9,29 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/auth"
+	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/exercise"
 	"github.com/jwallace145/progressive-overload-fitness-tracker/internal/httpresp"
 )
 
 // Handler exposes HTTP endpoints for workout logging.
+//
+// The progression endpoint needs to translate a muscle-group filter
+// into the set of exercises that target it, so the handler depends on
+// the exercise repository as well as the workout one. This is the only
+// cross-package coupling in the workout HTTP layer — the underlying
+// workout domain types and repository still have no compile-time
+// dependency on `exercise` (per CLAUDE.md: "Workout package doesn't
+// import exercise package's data"); the join lives at the HTTP edge.
 type Handler struct {
-	repo Repository
+	repo         Repository
+	exerciseRepo exercise.Repository
 }
 
-// NewHandler builds a Handler backed by the given repository.
-func NewHandler(repo Repository) *Handler {
-	return &Handler{repo: repo}
+// NewHandler builds a Handler backed by the given repositories. The
+// exercise repo is used by the progression endpoint to resolve a
+// muscle-group filter into a list of catalog exercises.
+func NewHandler(repo Repository, exerciseRepo exercise.Repository) *Handler {
+	return &Handler{repo: repo, exerciseRepo: exerciseRepo}
 }
 
 // Mount registers workout routes on the given router. Callers are expected
@@ -65,21 +77,31 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	httpresp.OK(w, "listed workouts", workouts)
 }
 
-// progression handles GET /workouts/progression.
+// progression handles GET /workouts/progression — the muscle-group
+// view that powers the Progress page.
 //
 // Query params:
-//   - exercise_id (required): the catalog slug to analyze
+//   - muscle_group (required): one of the catalog muscle group enum
+//     values. The handler resolves it to the set of exercises that
+//     target the group and aggregates across all of them.
 //   - since (optional, RFC3339): start of the date range; defaults to
-//     `until - 90 days` when omitted
+//     `until - 90 days` when omitted.
 //   - until (optional, RFC3339): end of the date range; defaults to
-//     now when omitted
+//     now when omitted.
 //
-// Pulls workouts in [since, until] for the authed user, then hands
-// off to ComputeProgression to do the per-set Epley 1RM math, the
-// unit reconciliation, and the trendline regression. The repo's
-// 50-row default would cap an active lifter's 90-day window so we
-// raise the limit to 1000 here — well above any realistic exercise
-// volume.
+// Additional filter params (exercise_id, equipment, etc.) will be
+// added to this endpoint over time. The intent is one progression
+// endpoint that dispatches on which filter the caller provided rather
+// than a separate URL per filter.
+//
+// For each exercise that targets the requested muscle group, the
+// handler reads that exercise's full 1RM history (the table written
+// by every workout CRUD), computes a recency-weighted current
+// baseline, normalizes every historical entry against it, and emits
+// one point per (workout, exercise) pair. The frontend plots
+// everything on a single normalized axis. See
+// prog-strength-docs/sows/estimated-one-rep-max-time-series-table.md
+// for the full rationale.
 func (h *Handler) progression(w http.ResponseWriter, r *http.Request) {
 	userID, ok := auth.UserIDFrom(r.Context())
 	if !ok {
@@ -88,15 +110,21 @@ func (h *Handler) progression(w http.ResponseWriter, r *http.Request) {
 	}
 
 	q := r.URL.Query()
-	exerciseID := q.Get("exercise_id")
-	if exerciseID == "" {
-		httpresp.Error(w, http.StatusBadRequest, "exercise_id is required")
+	muscleGroupRaw := q.Get("muscle_group")
+	if muscleGroupRaw == "" {
+		httpresp.Error(w, http.StatusBadRequest, "muscle_group is required")
+		return
+	}
+	mg := exercise.MuscleGroup(muscleGroupRaw)
+	if !mg.Valid() {
+		httpresp.Error(w, http.StatusBadRequest, "invalid muscle_group")
 		return
 	}
 
 	// `until` defaults to now; `since` defaults to until - 90 days.
 	// Compute `until` first so the `since` fallback can use it.
-	until := time.Now()
+	now := time.Now()
+	until := now
 	if s := q.Get("until"); s != "" {
 		t, err := time.Parse(time.RFC3339, s)
 		if err != nil {
@@ -121,17 +149,39 @@ func (h *Handler) progression(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	workouts, err := h.repo.ListByUser(r.Context(), userID, ListOptions{
-		Since: &since,
-		Until: &until,
-		Limit: 1000,
-	})
+	// Resolve the muscle group to its set of catalog exercises.
+	exercises, err := h.exerciseRepo.List(r.Context(), exercise.ListOptions{MuscleGroup: mg})
 	if err != nil {
-		httpresp.ServerError(w, r.Context(), "list workouts", err)
+		httpresp.ServerError(w, r.Context(), "list exercises by muscle group", err)
 		return
 	}
 
-	result := ComputeProgression(workouts, exerciseID, since, until)
+	// For each exercise, pull a history window broad enough to cover
+	// both the baseline computation (always last DefaultBaselineWindow)
+	// and the chart points (respects since/until). Query the wider of
+	// the two so a single fetch serves both purposes.
+	histories := make([]ExerciseHistory, 0, len(exercises))
+	historyFloor := now.Add(-DefaultBaselineWindow)
+	if since.Before(historyFloor) {
+		historyFloor = since
+	}
+	for _, ex := range exercises {
+		entries, err := h.repo.ListOneRepMaxHistory(r.Context(), userID, ex.ID, &historyFloor, nil)
+		if err != nil {
+			httpresp.ServerError(w, r.Context(), "list one rep max history", err)
+			return
+		}
+		if len(entries) == 0 {
+			continue
+		}
+		histories = append(histories, ExerciseHistory{
+			ExerciseID:   ex.ID,
+			ExerciseName: ex.Name,
+			Entries:      entries,
+		})
+	}
+
+	result := ComputeMuscleGroupProgression(muscleGroupRaw, histories, since, until, now)
 	httpresp.OK(w, "computed progression", result)
 }
 
