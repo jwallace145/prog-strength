@@ -1,3 +1,10 @@
+# [0.20.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.19.1...v0.20.0) (2026-05-18)
+
+
+### Features
+
+* **workouts:** paginated GET /workouts with timeframe filters ([c5dd12e](https://github.com/Prog-Strength/prog-strength-api/commit/c5dd12e8fd48311bbbd469041179144cd929b93e))
+
 ## [0.19.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.19.0...v0.19.1) (2026-05-18)
 
 
