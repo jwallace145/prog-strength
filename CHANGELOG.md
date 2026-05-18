@@ -1,3 +1,10 @@
+# [0.18.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.17.0...v0.18.0) (2026-05-18)
+
+
+### Features
+
+* **exercises:** add Dumbbell Reverse Lunge, Leg Press, Calf Press ([39bfb5a](https://github.com/Prog-Strength/prog-strength-api/commit/39bfb5a0ad5e08f77ce0decf18d9fc725aa697cd))
+
 # [0.17.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.16.0...v0.17.0) (2026-05-18)
 
 
