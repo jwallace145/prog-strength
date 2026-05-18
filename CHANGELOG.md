@@ -1,3 +1,10 @@
+# [0.16.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.15.0...v0.16.0) (2026-05-18)
+
+
+### Features
+
+* **exercises:** add Neutral Grip Dumbbell Incline Row to catalog ([2b0bd8d](https://github.com/Prog-Strength/prog-strength-api/commit/2b0bd8d0801b064502bcb08efd995d6ba3f4faec))
+
 # [0.15.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.14.0...v0.15.0) (2026-05-18)
 
 
