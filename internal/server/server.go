@@ -125,6 +125,11 @@ func New(cfg config.Config) (*Server, error) {
 			}
 			telemetryRepo := telemetry.NewSQLiteRepository(telemetryDB)
 			telemetry.NewHandler(telemetryRepo).Mount(r)
+			// Daily TTL: NULLs content/arguments_json/result_summary
+			// after 90 days. Metadata (token counts, latencies, tool
+			// names, timestamps) is kept indefinitely. Background
+			// goroutine; survives until process exit.
+			telemetryRepo.StartContentTTL(context.Background(), telemetry.ContentRetention)
 			log.Println("telemetry: agent event recording enabled")
 		} else {
 			log.Println("telemetry: disabled (TELEMETRY_DATABASE_URL unset)")
