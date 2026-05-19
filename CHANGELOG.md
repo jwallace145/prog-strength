@@ -1,3 +1,10 @@
+# [0.23.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.22.0...v0.23.0) (2026-05-19)
+
+
+### Features
+
+* **build:** publish API image to ECR and pull from it on deploy ([6ee11fa](https://github.com/Prog-Strength/prog-strength-api/commit/6ee11fa7de49d20a58aedf802db1d9a1f70c3dd5))
+
 # [0.22.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.21.1...v0.22.0) (2026-05-19)
 
 
