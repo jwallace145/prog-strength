@@ -1,3 +1,10 @@
+## [0.23.1](https://github.com/Prog-Strength/prog-strength-api/compare/v0.23.0...v0.23.1) (2026-05-19)
+
+
+### Bug Fixes
+
+* **build:** build image on a native ARM runner ([326b9a8](https://github.com/Prog-Strength/prog-strength-api/commit/326b9a88578997b20904f77f0f7c46acce2c622d))
+
 # [0.23.0](https://github.com/Prog-Strength/prog-strength-api/compare/v0.22.0...v0.23.0) (2026-05-19)
 
 
