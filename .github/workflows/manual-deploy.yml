@@ -83,16 +83,20 @@ jobs:
             # full rationale on why this matters with appleboy/ssh-action.
             set -e
 
-            # Refresh the infra repo for the latest Caddyfile (bind-mounted
-            # into the caddy container at compose-up time).
+            # All compose / Caddy / monitoring config lives in the infra
+            # repo. The api repo isn't checked out on the host anymore;
+            # the image at this tag must already exist in ECR.
             cd /home/ubuntu/prog-strength-infra
             git fetch --prune
             git checkout main
             git pull --ff-only
 
-            cd /home/ubuntu/prog-strength-api
-            git fetch --tags --prune
-            git checkout "v${RELEASE_VERSION}"
+            cd compose/api
+
+            # ECR login via the instance role (see release.yml).
+            ECR_REGISTRY="$(aws sts get-caller-identity --query Account --output text).dkr.ecr.us-east-2.amazonaws.com"
+            aws ecr get-login-password --region us-east-2 \
+              | docker login --username AWS --password-stdin "${ECR_REGISTRY}"
 
             umask 077
             cat > .env <<EOF
@@ -109,14 +113,16 @@ jobs:
             GRAFANA_ADMIN_USER=${GRAFANA_ADMIN_USER}
             GRAFANA_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
             APP_VERSION=v${RELEASE_VERSION}
+            ECR_REGISTRY=${ECR_REGISTRY}
             EOF
 
             # Merge the monitoring stack from prog-strength-infra into
             # the same compose project (same pattern as release.yml).
             COMPOSE_FILES=(-f docker-compose.yml -f /home/ubuntu/prog-strength-infra/monitoring/docker-compose.monitoring.yml)
 
+            docker compose "${COMPOSE_FILES[@]}" pull api
             docker compose "${COMPOSE_FILES[@]}" down
-            docker compose "${COMPOSE_FILES[@]}" up --build -d
+            docker compose "${COMPOSE_FILES[@]}" up -d
 
             echo "Deployed v${RELEASE_VERSION}"
             docker compose "${COMPOSE_FILES[@]}" ps
