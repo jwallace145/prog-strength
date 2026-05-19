@@ -105,9 +105,13 @@ jobs:
             APP_VERSION=v${RELEASE_VERSION}
             EOF
 
-            docker compose down
-            docker compose up --build -d
+            # Merge the monitoring stack from prog-strength-infra into
+            # the same compose project (same pattern as release.yml).
+            COMPOSE_FILES=(-f docker-compose.yml -f /home/ubuntu/prog-strength-infra/monitoring/docker-compose.monitoring.yml)
+
+            docker compose "${COMPOSE_FILES[@]}" down
+            docker compose "${COMPOSE_FILES[@]}" up --build -d
 
             echo "Deployed v${RELEASE_VERSION}"
-            docker compose ps
-            docker compose logs --tail=50
+            docker compose "${COMPOSE_FILES[@]}" ps
+            docker compose "${COMPOSE_FILES[@]}" logs --tail=50
